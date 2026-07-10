@@ -110,19 +110,32 @@
   // Passo 3: renderizar o bloco "Recomendados" no DOM
   // -------------------------------------------------------------------------
   //
-  // LIMITACAO CONHECIDA DESTE v.Alpha (documentada tambem em SUMMARY.md):
-  // renderiza apenas um link/rotulo simples com o ID do produto recomendado —
-  // nao busca nome/imagem/preco do produto recomendado (isso exigiria uma
-  // segunda chamada, por exemplo a getProduct() ja existente no client.js do
-  // backend, exposta via um novo endpoint). Aceitavel para validar o pipeline
-  // ponta-a-ponta (Metafield -> endpoint proprio -> Script -> DOM real).
-  function renderRecommendationBlock(recommendedProductId) {
+  // Correcao pos-verificacao-visual do Wave 4: a primeira versao deste v.Alpha
+  // linkava para `/produtos/{id}` (ID numerico), que sempre resulta em 404 —
+  // a rota real da Nuvemshop usa o "Identificador URL" (handle) do produto,
+  // nao o ID. O backend agora retorna `recommendedProduct.url` ja pronto
+  // (canonical_url da API publica), alem de nome/imagem/preco, entao o bloco
+  // deixou de ser so um link de texto generico.
+  function renderRecommendationBlock(recommendedProduct) {
+    var imageHtml = recommendedProduct.image
+      ? '<img src="' + recommendedProduct.image + '" alt="' + recommendedProduct.name + '" ' +
+        'style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0;">'
+      : '';
+    var priceHtml = recommendedProduct.price
+      ? '<div style="color: #555; margin-top: 4px;">R$ ' + recommendedProduct.price + '</div>'
+      : '';
+
     var html =
       '<div id="recomendados-alpha-block" style="margin: 16px 0;">' +
       '<h2 style="font-size: 1.1em; margin-bottom: 8px;">Recomendados</h2>' +
-      '<a href="/produtos/' + encodeURIComponent(recommendedProductId) + '" ' +
-      'data-recommended-product-id="' + encodeURIComponent(recommendedProductId) + '">' +
-      'Ver produto recomendado (ID ' + recommendedProductId + ')' +
+      '<a href="' + recommendedProduct.url + '" ' +
+      'data-recommended-product-id="' + encodeURIComponent(recommendedProduct.name) + '" ' +
+      'style="display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit;">' +
+      imageHtml +
+      '<div>' +
+      '<div style="font-weight: 600;">' + recommendedProduct.name + '</div>' +
+      priceHtml +
+      '</div>' +
       '</a>' +
       '</div>';
 
@@ -162,8 +175,8 @@
 
     fetchRecommendation(productId)
       .then(function (data) {
-        if (data && data.recommendedProductId) {
-          var inserted = renderRecommendationBlock(data.recommendedProductId);
+        if (data && data.recommendedProductId && data.recommendedProduct) {
+          var inserted = renderRecommendationBlock(data.recommendedProduct);
           if (!inserted) {
             console.warn(
               '[recomendados-alpha] Nao foi possivel encontrar ' +
