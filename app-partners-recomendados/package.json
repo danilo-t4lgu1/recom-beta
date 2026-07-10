@@ -11,5 +11,8 @@
   },
   "devDependencies": {
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
   }
 }
