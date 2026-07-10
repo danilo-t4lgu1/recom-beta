@@ -11,7 +11,30 @@
 // de resposta é o mesmo objeto mínimo { productId, recommendedProductId } de sempre.
 import { getRecommendations } from '../../src/api/recommendations.js';
 
+// CORS: este endpoint é chamado via fetch() direto do navegador do visitante
+// (storefront-script/main.js, rodando em talgui.com.br) — sem header
+// Access-Control-Allow-Origin, o navegador bloqueia a resposta com
+// "TypeError: Failed to fetch" antes mesmo de o script poder ler o corpo
+// (curl não reproduz isso, pois CORS é aplicado só pelo navegador; por isso
+// os testes via curl no Wave 4 passaram sem revelar este problema). Resposta
+// é pública e somente-leitura (nenhum segredo), então liberar amplamente não
+// expande a superfície de risco documentada em PLAT-05.
+const ALLOWED_ORIGIN = 'https://talgui.com.br';
+
+function setCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
 export default async function handler(req, res) {
+  setCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method Not Allowed' });
     return;
