@@ -27,15 +27,24 @@
   // Configuracao
   // -------------------------------------------------------------------------
 
-  // URL do backend proprio (Task 1 deste plano — app-partners-recomendados).
-  // Para este v.Alpha aponta para um endereco local/tunel temporario; sera
-  // finalizada com a URL publica real no plano de publicacao (01-05 / Wave 4).
-  var BACKEND_URL = 'http://localhost:3000';
+  // URL do backend proprio (app-partners-recomendados), publicada no Wave 4
+  // (01-05) como Vercel Serverless Function no MESMO projeto que ja hospeda
+  // os webhooks LGPD (plano 01-02): https://app-partners-recomendados.vercel.app.
+  // Rota correspondente: api/recommendations/[productId].js (convencao de rota
+  // dinamica do Vercel) — por isso o path abaixo e '/api/recommendations/'
+  // (nao '/recommendations/', usado apenas pelo server.js local de 01-03).
+  var BACKEND_URL = 'https://app-partners-recomendados.vercel.app';
 
   // Posicao exata documentada em 01-04-SUMMARY.md (D-03): o bloco customizado
   // deve renderizar como irmao, entre o bloco "compre junto" e a secao de
   // descricao do produto — mesmo lugar onde o bloco nativo "Produtos
   // Relacionados" aparecia antes de ser suprimido via CSS (01-04).
+  // Reconfirmado no Wave 4 (01-05, Task 1 adaptada per override D-11): os dois
+  // seletores abaixo (#product-description / #compre-junto-block) continuam
+  // batendo exatamente com a posicao documentada em 01-04-SUMMARY.md — nenhum
+  // ajuste foi necessario. Nao ha slot NubeSDK nem build/bundle step neste
+  // v.Alpha (Script API tradicional), entao a Task 1 original do plano
+  // (ajustar slot `nube.render()` + rebuild `tsup`) nao se aplica.
   var ANCHOR_BEFORE_SELECTOR = '#product-description';
   var ANCHOR_AFTER_SELECTOR = '#compre-junto-block';
 
@@ -87,7 +96,7 @@
   // access_token/client_secret da Nuvemshop e embutido neste arquivo
   // client-side (mesma fronteira PLAT-05 do endpoint do backend).
   function fetchRecommendation(productId) {
-    var url = BACKEND_URL + '/recommendations/' + encodeURIComponent(productId);
+    var url = BACKEND_URL + '/api/recommendations/' + encodeURIComponent(productId);
     return fetch(url, { method: 'GET' })
       .then(function (response) {
         if (!response.ok) {
