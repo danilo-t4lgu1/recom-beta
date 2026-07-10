@@ -116,13 +116,33 @@
   // nao o ID. O backend agora retorna `recommendedProduct.url` ja pronto
   // (canonical_url da API publica), alem de nome/imagem/preco, entao o bloco
   // deixou de ser so um link de texto generico.
+  // Achado do code review de fechamento da Fase 1 (CR-01): nome/URL/imagem do
+  // produto recomendado vem da API publica da Nuvemshop (catalogo, editavel
+  // pelo lojista) e era concatenado direto no HTML sem escapar — um nome de
+  // produto com `"`/`<`/`>` quebra o atributo ou injeta markup na pagina real.
+  // Sem isso a pagina fica vulneravel a HTML injection vindo de um campo de
+  // catalogo, independente da divida ja documentada do v.Alpha (D-11, que
+  // cobre o modelo de execucao do script, nao escaping de saida).
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function renderRecommendationBlock(recommendedProduct) {
-    var imageHtml = recommendedProduct.image
-      ? '<img src="' + recommendedProduct.image + '" alt="' + recommendedProduct.name + '" ' +
+    var safeUrl = escapeHtml(recommendedProduct.url);
+    var safeName = escapeHtml(recommendedProduct.name);
+    var safeImage = recommendedProduct.image ? escapeHtml(recommendedProduct.image) : null;
+
+    var imageHtml = safeImage
+      ? '<img src="' + safeImage + '" alt="' + safeName + '" ' +
         'style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0;">'
       : '';
     var priceHtml = recommendedProduct.price
-      ? '<div style="color: #555; margin-top: 4px;">R$ ' + recommendedProduct.price + '</div>'
+      ? '<div style="color: #555; margin-top: 4px;">R$ ' + escapeHtml(recommendedProduct.price) + '</div>'
       : '';
 
     // Envolvido em .container-fluid.position-relative para herdar o mesmo
@@ -134,12 +154,12 @@
       '<div class="container-fluid position-relative">' +
       '<div id="recomendados-alpha-block" style="margin: 16px 0;">' +
       '<h2 style="font-size: 1.1em; margin-bottom: 8px;">Recomendados</h2>' +
-      '<a href="' + recommendedProduct.url + '" ' +
+      '<a href="' + safeUrl + '" ' +
       'data-recommended-product-id="' + encodeURIComponent(recommendedProduct.name) + '" ' +
       'style="display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit;">' +
       imageHtml +
       '<div>' +
-      '<div style="font-weight: 600;">' + recommendedProduct.name + '</div>' +
+      '<div style="font-weight: 600;">' + safeName + '</div>' +
       priceHtml +
       '</div>' +
       '</a>' +

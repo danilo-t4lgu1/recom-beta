@@ -31,7 +31,7 @@ async function assertOk(response, context) {
  */
 export async function getProduct(productId) {
   const { accessToken, storeId } = getAccessToken();
-  const url = `${API_BASE}/${storeId}/products/${productId}`;
+  const url = `${API_BASE}/${storeId}/products/${encodeURIComponent(productId)}`;
 
   const response = await fetch(url, {
     method: 'GET',
@@ -77,7 +77,7 @@ export async function createMetafield({ ownerId, value }) {
  */
 export async function getMetafields({ ownerId }) {
   const { accessToken, storeId } = getAccessToken();
-  const url = `${API_BASE}/${storeId}/metafields/products?owner_id=${ownerId}&namespace=recomendados`;
+  const url = `${API_BASE}/${storeId}/metafields/products?owner_id=${encodeURIComponent(ownerId)}&namespace=recomendados`;
 
   const response = await fetch(url, {
     method: 'GET',
