@@ -3,6 +3,7 @@
 // Sem dependências externas — usa fetch global do Node.
 
 import { getAccessToken } from '../auth/nuvemshop-auth.js';
+import { fetchWithRateLimit } from '../rate-limit/adaptive-limiter.js';
 
 const API_BASE = 'https://api.tiendanube.com/v1';
 const USER_AGENT = 'TalguiRecomendados (danilopradosilva20@gmail.com)';
@@ -86,4 +87,65 @@ export async function getMetafields({ ownerId }) {
 
   await assertOk(response, `GET ${url}`);
   return response.json();
+}
+
+/**
+ * Lista as categorias da loja Talgui via GET /categories, usada para resolver o
+ * category_id real de uma categoria por nome (PLAT-02, Pitfall C) — nunca hardcoded.
+ * Não pagina múltiplas páginas (o catálogo de categorias é pequeno), mas loga um aviso
+ * se o header `link` indicar `rel="next"`, para não mascarar silenciosamente uma lista
+ * incompleta caso existam mais de 200 categorias (caso não esperado).
+ * @param {{ limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} [params]
+ * @returns {Promise<Array<object>>} lista de categorias retornada pela API
+ */
+export async function listCategories({ limiter } = {}) {
+  const { accessToken, storeId } = getAccessToken();
+  const url = `${API_BASE}/${storeId}/categories?per_page=200`;
+
+  const response = await fetchWithRateLimit(
+    url,
+    { method: 'GET', headers: buildHeaders(accessToken) },
+    limiter
+  );
+
+  await assertOk(response, `GET ${url}`);
+
+  const linkHeader = response.headers.get('link') || '';
+  if (linkHeader.includes('rel="next"')) {
+    console.warn(
+      `listCategories: header 'link' indica rel="next" — existem mais de 200 categorias, ` +
+        'a lista retornada pode estar incompleta.'
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Lista produtos de uma categoria da loja Talgui via GET /products?category_id=,
+ * paginado (PLAT-02, DATA-01). `hasNextPage` deriva do header `link` (`rel="next"`)
+ * OU do fallback por tamanho de página (products.length === perPage) — nunca assume
+ * "última página" apenas pela ausência do header `link` (Pitfall/T-02-02).
+ * @param {{ categoryId: string|number, page?: number, perPage?: number, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
+ * @returns {Promise<{ products: Array<object>, hasNextPage: boolean }>}
+ */
+export async function listProducts({ categoryId, page = 1, perPage = 200, limiter } = {}) {
+  const { accessToken, storeId } = getAccessToken();
+  const url =
+    `${API_BASE}/${storeId}/products?category_id=${encodeURIComponent(categoryId)}` +
+    `&page=${encodeURIComponent(page)}&per_page=${encodeURIComponent(perPage)}`;
+
+  const response = await fetchWithRateLimit(
+    url,
+    { method: 'GET', headers: buildHeaders(accessToken) },
+    limiter
+  );
+
+  await assertOk(response, `GET ${url}`);
+
+  const products = await response.json();
+  const linkHeader = response.headers.get('link') || '';
+  const hasNextPage = linkHeader.includes('rel="next"') || products.length === perPage;
+
+  return { products, hasNextPage };
 }
