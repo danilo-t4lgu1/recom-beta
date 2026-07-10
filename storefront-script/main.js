@@ -125,7 +125,13 @@
       ? '<div style="color: #555; margin-top: 4px;">R$ ' + recommendedProduct.price + '</div>'
       : '';
 
+    // Envolvido em .container-fluid.position-relative para herdar o mesmo
+    // padding/alinhamento horizontal que as demais secoes da pagina de produto
+    // ja usam neste tema (Morelia) — sem isso, o bloco ficava colado na borda
+    // esquerda da tela, fora do alinhamento do restante do conteudo (achado da
+    // verificacao visual do Wave 4).
     var html =
+      '<div class="container-fluid position-relative">' +
       '<div id="recomendados-alpha-block" style="margin: 16px 0;">' +
       '<h2 style="font-size: 1.1em; margin-bottom: 8px;">Recomendados</h2>' +
       '<a href="' + recommendedProduct.url + '" ' +
@@ -137,6 +143,7 @@
       priceHtml +
       '</div>' +
       '</a>' +
+      '</div>' +
       '</div>';
 
     var beforeEl = document.querySelector(ANCHOR_BEFORE_SELECTOR);
