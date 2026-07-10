@@ -59,7 +59,7 @@ export async function createMetafield({ ownerId, value }) {
       namespace: 'recomendados',
       key: 'produto_sugerido',
       value,
-      owner_resource: 'product',
+      owner_resource: 'Product',
       owner_id: ownerId,
       description: 'ID do produto recomendado - spike de viabilidade Fase 1',
     }),
