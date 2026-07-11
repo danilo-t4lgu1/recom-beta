@@ -18,6 +18,51 @@ const MIN_SIZES_IN_STOCK = 3; // D-04: regra de negócio nomeada, nunca inline
 const RECOMMENDATION_NAMESPACE = 'recomendados';
 const RECOMMENDATION_KEY = 'produto_sugerido';
 
+// WR-06: nomes de atributo aceitos para localizar a posição de cor/tamanho em
+// `product.attributes`/`variant.values` (a API Nuvemshop retorna `attributes` como
+// array paralelo posicionalmente a `variant.values`, nomeando cada posição — ex.
+// `["Cor", "Tamanho"]` — mas o nome exato configurado pela loja pode variar).
+const COLOR_ATTRIBUTE_NAMES = ['cor', 'color'];
+const SIZE_ATTRIBUTE_NAMES = ['tamanho', 'size'];
+
+/**
+ * Localiza o índice de um atributo em `product.attributes` (array de objetos com
+ * campo `.pt`) comparando (case-insensitive) contra uma lista de nomes aceitos.
+ * Retorna -1 se `product.attributes` estiver ausente ou o nome não for encontrado —
+ * nesse caso o chamador cai no fallback posicional (WR-06), nunca lança erro.
+ * @param {Array<object>|undefined} attributes
+ * @param {string[]} acceptedNames
+ * @returns {number}
+ */
+function findAttributeIndex(attributes, acceptedNames) {
+  if (!Array.isArray(attributes)) return -1;
+  return attributes.findIndex((attr) => {
+    const name = (attr && attr.pt ? attr.pt : '').trim().toLowerCase();
+    return acceptedNames.includes(name);
+  });
+}
+
+/**
+ * Extrai o valor de cor/tamanho de uma variante usando o índice de
+ * `product.attributes` que corresponde ao nome do atributo (WR-06), evitando a
+ * suposição fixa de "posição 0 = cor, posição 1 = tamanho". Se `product.attributes`
+ * não tiver o nome esperado (ausente, unicamente atributo diferente, ordem
+ * invertida), cai de volta na posição fornecida como `fallbackIndex` — o mesmo
+ * comportamento anterior a esta correção — para não quebrar produtos sem
+ * `attributes` nomeados.
+ * @param {object} product
+ * @param {object} variant
+ * @param {string[]} acceptedNames
+ * @param {number} fallbackIndex
+ * @returns {string|null}
+ */
+function extractVariantValueByAttributeName(product, variant, acceptedNames, fallbackIndex) {
+  if (!variant.values) return null;
+  const attrIndex = findAttributeIndex(product.attributes, acceptedNames);
+  const index = attrIndex >= 0 ? attrIndex : fallbackIndex;
+  return variant.values[index] ? variant.values[index].pt : null;
+}
+
 /**
  * Resolve o category_id real de uma categoria pelo nome via GET /categories — nunca
  * hardcoded (D-01/D-02/Pitfall C do 02-RESEARCH.md).
@@ -135,8 +180,11 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
           id: String(variant.id),
           productId,
           sku: variant.sku || null,
-          colorValue: variant.values && variant.values[0] ? variant.values[0].pt : null,
-          sizeValue: variant.values && variant.values[1] ? variant.values[1].pt : null,
+          // WR-06: mapeia por nome de atributo (product.attributes) quando disponível,
+          // em vez de assumir posição fixa 0=cor/1=tamanho; cai no índice posicional
+          // apenas se o nome do atributo não puder ser identificado.
+          colorValue: extractVariantValueByAttributeName(product, variant, COLOR_ATTRIBUTE_NAMES, 0),
+          sizeValue: extractVariantValueByAttributeName(product, variant, SIZE_ATTRIBUTE_NAMES, 1),
           stockTotal: getVariantStock(variant),
         });
       }
@@ -149,15 +197,23 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       const fabricTagRaw = rawTags.find((tag) => canonicalMap.has(tag)) || null;
       const fabricTagCanonical = fabricTagRaw ? canonicalMap.get(fabricTagRaw) : null;
 
+      // WR-06/IN-03: mesmo mapeamento por nome de atributo usado no loop de variantes
+      // acima, aplicado à primeira variante retornada pela API — este valor continua
+      // sendo "a cor da primeira variante retornada", não necessariamente
+      // representativa para produtos multi-cor (ver IN-03), mas ao menos deixa de
+      // assumir a posição fixa 0 para o valor de cor.
+      const firstVariant = (product.variants && product.variants[0]) || null;
+      const snapshotColorValue = firstVariant
+        ? extractVariantValueByAttributeName(product, firstVariant, COLOR_ATTRIBUTE_NAMES, 0)
+        : null;
+
       snapshots.push({
         productId,
         hasAvailableGrade: availableGrade ? 1 : 0,
         sizesInStockCount,
         fabricTagRaw,
         fabricTagCanonical,
-        colorValue: product.variants && product.variants[0] && product.variants[0].values && product.variants[0].values[0]
-          ? product.variants[0].values[0].pt
-          : null,
+        colorValue: snapshotColorValue,
         snapshotAt,
       });
 
