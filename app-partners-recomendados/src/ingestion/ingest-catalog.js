@@ -87,7 +87,9 @@ async function readRecommendationBaseline(productId, limiter) {
  * transação. Garante que `ingestion_runs.status` é sempre finalizado (success ou
  * failed), nunca preso em 'running'.
  * @param {{ categoryName?: string }} [params]
- * @returns {Promise<{ runId: number, productsRead: number, status: 'success' }>}
+ * @returns {Promise<{ runId: number, productsRead: number, status: 'success',
+ *   availableCount: number, distinctTagCount: number, unmappedTagCount: number,
+ *   baselineNonNullCount: number }>}
  */
 export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
   const limiter = new AdaptiveRateLimiter();
@@ -108,6 +110,8 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
     const variants = [];
     const snapshots = [];
     const recommendationBaselines = [];
+    let availableCount = 0;
+    let baselineNonNullCount = 0;
 
     for (const product of allProducts) {
       const productId = String(product.id);
@@ -115,6 +119,7 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
         (variant) => getVariantStock(variant) > 0
       ).length;
       const availableGrade = hasAvailableGrade(product, { minSizesInStock: MIN_SIZES_IN_STOCK });
+      if (availableGrade) availableCount += 1;
 
       products.push({
         id: productId,
@@ -153,6 +158,7 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       });
 
       const currentRecommendedProductId = await readRecommendationBaseline(productId, limiter);
+      if (currentRecommendedProductId !== null) baselineNonNullCount += 1;
       recommendationBaselines.push({
         productId,
         currentRecommendedProductId,
@@ -176,7 +182,15 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
 
     finishIngestionRun({ runId, status: 'success', productsRead: allProducts.length });
 
-    return { runId, productsRead: allProducts.length, status: 'success' };
+    return {
+      runId,
+      productsRead: allProducts.length,
+      status: 'success',
+      availableCount,
+      distinctTagCount: frequency.size,
+      unmappedTagCount: unmapped.size,
+      baselineNonNullCount,
+    };
   } catch (error) {
     finishIngestionRun({ runId, status: 'failed', productsRead: 0 });
     throw error;
