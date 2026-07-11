@@ -140,10 +140,12 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       }
 
       const rawTags = ((product.tags || '').split(',').map((t) => t.trim()).filter(Boolean));
-      const fabricTagRaw = rawTags.length > 0 ? rawTags[0] : null;
-      const fabricTagCanonical = fabricTagRaw && canonicalMap.has(fabricTagRaw)
-        ? canonicalMap.get(fabricTagRaw)
-        : null;
+      // CR-01: product.tags mistura tags de marketing/SEO com tags de tecido (uma vez
+      // que a planilha D-07 for importada) sem nenhuma ordem/posição garantida. Só
+      // tratamos uma tag como "a tag de tecido" quando ela já é uma chave conhecida no
+      // canonicalMap — nunca assumimos rawTags[0] arbitrariamente.
+      const fabricTagRaw = rawTags.find((tag) => canonicalMap.has(tag)) || null;
+      const fabricTagCanonical = fabricTagRaw ? canonicalMap.get(fabricTagRaw) : null;
 
       snapshots.push({
         productId,
