@@ -25,7 +25,7 @@ const RECOMMENDATION_KEY = 'produto_sugerido';
  * @param {AdaptiveRateLimiter} limiter
  * @returns {Promise<{ id: string|number, name: string }>}
  */
-async function resolveCategoryIdByName(targetName, limiter) {
+export async function resolveCategoryIdByName(targetName, limiter) {
   const categories = await listCategories({ limiter });
   const normalizedTarget = targetName.trim().toLowerCase();
   const match = categories.find(

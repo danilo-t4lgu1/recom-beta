@@ -6,34 +6,26 @@
 // Uso: node --env-file=.env scripts/resolve-category.js [nomeCategoria]
 // (default "Vestidos" se omitido)
 
-import { listCategories, listProducts } from '../src/nuvemshop-client/client.js';
+import { listProducts } from '../src/nuvemshop-client/client.js';
 import { AdaptiveRateLimiter } from '../src/rate-limit/adaptive-limiter.js';
+import { resolveCategoryIdByName } from '../src/ingestion/ingest-catalog.js';
 
 async function main() {
   const targetName = process.argv[2] || 'Vestidos';
   const limiter = new AdaptiveRateLimiter();
 
   console.log(`\n[1/2] Resolvendo category_id de "${targetName}" via GET /categories...`);
-  const categories = await listCategories({ limiter });
+  // WR-05: reaproveita a mesma lógica de match de ingest-catalog.js — nunca
+  // reimplementada aqui, para não divergir se a regra de match mudar.
+  const category = await resolveCategoryIdByName(targetName, limiter);
 
-  const normalizedTarget = targetName.trim().toLowerCase();
-  const match = categories.find(
-    (c) => (c.name?.pt || '').trim().toLowerCase() === normalizedTarget
-  );
-
-  if (!match) {
-    throw new Error(
-      `Categoria "${targetName}" não encontrada via GET /categories — confirme o nome exato no admin antes de prosseguir.`
-    );
-  }
-
-  console.log(`  OK — category_id resolvido: ${match.id} (nome: "${match.name?.pt}")`);
+  console.log(`  OK — category_id resolvido: ${category.id} (nome: "${category.name}")`);
 
   console.log(
-    `\n[2/2] Listando primeira página de produtos da categoria ${match.id} (per_page=200)...`
+    `\n[2/2] Listando primeira página de produtos da categoria ${category.id} (per_page=200)...`
   );
   const { products, hasNextPage } = await listProducts({
-    categoryId: match.id,
+    categoryId: category.id,
     page: 1,
     perPage: 200,
     limiter,
