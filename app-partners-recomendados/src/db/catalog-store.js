@@ -68,6 +68,10 @@ const updateIngestionRun = db.prepare(
    WHERE id = @runId`
 );
 
+const selectCanonicalMap = db.prepare(
+  `SELECT raw_tag, canonical_value FROM fabric_tag_canonical_map`
+);
+
 /**
  * Abre uma nova execução de ingestão, registrando-a como 'running'. Deve sempre ser
  * fechada posteriormente via `finishIngestionRun` (sucesso ou falha), nunca deixada
@@ -82,6 +86,17 @@ export function startIngestionRun({ categoryId, categoryName }) {
     categoryName,
   });
   return Number(info.lastInsertRowid);
+}
+
+/**
+ * Lê o mapa de canonicalização de tags de tecido persistido em
+ * `fabric_tag_canonical_map` (DATA-03), populado conforme a planilha D-07 é
+ * importada. Retorna um `Map` vazio se a tabela ainda não tiver linhas
+ * (comportamento esperado antes da primeira importação, D-06).
+ * @returns {Map<string, string>}
+ */
+export function getCanonicalMap() {
+  return new Map(selectCanonicalMap.all().map((row) => [row.raw_tag, row.canonical_value]));
 }
 
 /**

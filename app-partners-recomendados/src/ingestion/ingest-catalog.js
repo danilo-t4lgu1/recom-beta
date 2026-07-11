@@ -12,7 +12,7 @@ import { listCategories, listProducts, getMetafields } from '../nuvemshop-client
 import { AdaptiveRateLimiter } from '../rate-limit/adaptive-limiter.js';
 import { hasAvailableGrade, getVariantStock } from './stock-availability.js';
 import { auditFabricTags } from './fabric-taxonomy.js';
-import { startIngestionRun, persistIngestionBatch, finishIngestionRun } from '../db/catalog-store.js';
+import { startIngestionRun, persistIngestionBatch, finishIngestionRun, getCanonicalMap } from '../db/catalog-store.js';
 
 const MIN_SIZES_IN_STOCK = 3; // D-04: regra de negócio nomeada, nunca inline
 const RECOMMENDATION_NAMESPACE = 'recomendados';
@@ -101,8 +101,10 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
 
   try {
     // DATA-03: auditoria de tags de tecido roda UMA VEZ para todo o lote, não por
-    // produto. canonicalMap vazio na primeira execução é esperado (D-06).
-    const canonicalMap = new Map();
+    // produto. canonicalMap vazio na primeira execução é esperado (D-06) — mas agora
+    // é lido de fabric_tag_canonical_map, não mais hardcoded, para que o mapeamento
+    // funcione assim que a planilha D-07 for importada (WR-01).
+    const canonicalMap = getCanonicalMap();
     const { frequency, unmapped } = auditFabricTags(allProducts, canonicalMap);
 
     const snapshotAt = new Date().toISOString();
