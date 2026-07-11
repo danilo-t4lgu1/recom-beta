@@ -46,26 +46,34 @@ export class AdaptiveRateLimiter {
   }
 }
 
+const MAX_429_RETRIES = 5; // WR-02: teto de tentativas — nunca recursão irrestrita
+
 /**
  * Wrapper de fetch com throttling adaptativo (PLAT-02): espera se necessário, executa o
  * request, atualiza o limiter a partir dos headers reais da resposta, e faz retry em
  * 429 usando o x-rate-limit-reset real (nunca um backoff fixo). Se limiter não for
  * passado, cria uma instância local descartável para não quebrar chamadas sem limiter
- * explícito.
+ * explícito. Após MAX_429_RETRIES tentativas consecutivas de 429, lança erro em vez de
+ * recursar indefinidamente (WR-02) — evita que um job de ingestão fique preso para
+ * sempre em caso de quota esgotada/incidente prolongado na API.
  * @param {string} url
  * @param {RequestInit} [options]
  * @param {AdaptiveRateLimiter} [limiter]
+ * @param {number} [attempt]
  * @returns {Promise<Response>}
  */
-export async function fetchWithRateLimit(url, options, limiter = new AdaptiveRateLimiter()) {
+export async function fetchWithRateLimit(url, options, limiter = new AdaptiveRateLimiter(), attempt = 0) {
   await limiter.waitIfNeeded();
   const response = await fetch(url, options);
   limiter.updateFromHeaders(response.headers);
 
   if (response.status === 429) {
+    if (attempt >= MAX_429_RETRIES) {
+      throw new Error(`fetchWithRateLimit: excedeu ${MAX_429_RETRIES} tentativas de 429 para ${url}`);
+    }
     const resetMs = Number(response.headers.get('x-rate-limit-reset')) || 2000;
     await new Promise((resolve) => setTimeout(resolve, resetMs));
-    return fetchWithRateLimit(url, options, limiter);
+    return fetchWithRateLimit(url, options, limiter, attempt + 1);
   }
 
   return response;
