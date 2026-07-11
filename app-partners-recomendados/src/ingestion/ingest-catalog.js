@@ -66,12 +66,15 @@ async function listAllProductsInCategory(categoryId, limiter) {
 /**
  * Lê o baseline informativo do Metafield de recomendação atual de um produto
  * (DATA-02), reaproveitando `getMetafields()` já existente — sem lógica de drift
- * (D-12).
+ * (D-12). Recebe o mesmo `limiter` usado na paginação de produtos/categorias para que
+ * as ~628 chamadas de Metafields também respeitem o rate limit adaptativo (T-02-08,
+ * Pitfall B do RESEARCH.md) — não apenas a paginação.
  * @param {string|number} productId
+ * @param {import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter} limiter
  * @returns {Promise<string|null>}
  */
-async function readRecommendationBaseline(productId) {
-  const metafields = await getMetafields({ ownerId: productId });
+async function readRecommendationBaseline(productId, limiter) {
+  const metafields = await getMetafields({ ownerId: productId, limiter });
   const match = Array.isArray(metafields)
     ? metafields.find((m) => m.namespace === RECOMMENDATION_NAMESPACE && m.key === RECOMMENDATION_KEY)
     : null;
@@ -149,7 +152,7 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
         snapshotAt,
       });
 
-      const currentRecommendedProductId = await readRecommendationBaseline(productId);
+      const currentRecommendedProductId = await readRecommendationBaseline(productId, limiter);
       recommendationBaselines.push({
         productId,
         currentRecommendedProductId,

@@ -72,18 +72,23 @@ export async function createMetafield({ ownerId, value }) {
 
 /**
  * Lê de volta os Metafields do namespace "recomendados" de um produto, para
- * confirmar o round-trip (WRTE-01).
- * @param {{ ownerId: string|number }} params
+ * confirmar o round-trip (WRTE-01) e, na Fase 2, para ler o baseline informativo de
+ * recomendação de cada produto (DATA-02). Aceita `limiter` opcional para respeitar o
+ * rate limit adaptativo em volume (~628 chamadas na ingestão completa, T-02-08) — se
+ * omitido, `fetchWithRateLimit` cria uma instância descartável (comportamento anterior
+ * preservado para chamadas avulsas como `scripts/roundtrip-metafield.js`).
+ * @param {{ ownerId: string|number, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
  * @returns {Promise<Array<object>>} lista de Metafields encontrados
  */
-export async function getMetafields({ ownerId }) {
+export async function getMetafields({ ownerId, limiter }) {
   const { accessToken, storeId } = getAccessToken();
   const url = `${API_BASE}/${storeId}/metafields/products?owner_id=${encodeURIComponent(ownerId)}&namespace=recomendados`;
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: buildHeaders(accessToken),
-  });
+  const response = await fetchWithRateLimit(
+    url,
+    { method: 'GET', headers: buildHeaders(accessToken) },
+    limiter
+  );
 
   await assertOk(response, `GET ${url}`);
   return response.json();
