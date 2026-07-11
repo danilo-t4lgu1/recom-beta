@@ -11,14 +11,19 @@
 // externa e não são confiáveis por default).
 
 import Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, 'schema.sql');
+// WR-04: resolve relativo ao módulo (não a process.cwd()) — consistente com
+// SCHEMA_PATH acima — e garante que o diretório exista antes de abrir o arquivo,
+// já que better-sqlite3 não cria diretórios pai automaticamente.
+const DB_DIR = join(__dirname, '..', '..', 'data');
+mkdirSync(DB_DIR, { recursive: true });
 
-const db = new Database('data/catalog.db');
+const db = new Database(join(DB_DIR, 'catalog.db'));
 db.pragma('journal_mode = WAL');
 db.exec(readFileSync(SCHEMA_PATH, 'utf-8'));
 
