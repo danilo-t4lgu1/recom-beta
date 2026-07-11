@@ -196,7 +196,10 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       baselineNonNullCount,
     };
   } catch (error) {
-    finishIngestionRun({ runId, status: 'failed', productsRead: 0 });
+    // WR-03: allProducts já está disponível antes do try — registra a contagem real
+    // em vez de sempre 0, para que ingestion_runs distinga falha antes de qualquer
+    // leitura de falha após já ter processado a maioria dos produtos.
+    finishIngestionRun({ runId, status: 'failed', productsRead: allProducts.length });
     throw error;
   }
 }
