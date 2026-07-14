@@ -179,3 +179,115 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
     }
   });
 });
+
+describe('recommendForProduct - cascata de desempate D-13 e limite de 8 (Task 2)', () => {
+  it('com 10 elegíveis retorna exatamente 8, ordenados por stockTotal decrescente (Test 11)', () => {
+    const source = makeProduct({ productId: '1' });
+    const candidates = [];
+    for (let i = 1; i <= 10; i += 1) {
+      candidates.push(
+        makeProduct({
+          productId: String(100 + i),
+          variants: [makeVariant({ sizeValue: 'P', stockTotal: i * 10 })],
+        })
+      );
+    }
+
+    const result = recommendForProduct('1', [source, ...candidates]);
+
+    expect(result.length).toBe(8);
+    const stockTotals = result.map((r) => r.stockTotal);
+    expect(stockTotals).toEqual([...stockTotals].sort((a, b) => b - a));
+    expect(stockTotals).toEqual([100, 90, 80, 70, 60, 50, 40, 30]);
+  });
+
+  it('empate em stockTotal: mais tamanhos com estoque vence (Test 12 - nível 2)', () => {
+    const source = makeProduct({ productId: '1' });
+    const fewerSizes = makeProduct({
+      productId: '2',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 10 })],
+    });
+    const moreSizes = makeProduct({
+      productId: '3',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 }), makeVariant({ sizeValue: 'M', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, fewerSizes, moreSizes]);
+
+    expect(result.map((r) => r.productId)).toEqual(['3', '2']);
+  });
+
+  it('empate em stockTotal e sizesWithStock: mais estoque em P/M/G vence (Test 13 - nível 3, grade letra)', () => {
+    const source = makeProduct({ productId: '1' });
+    const central = makeProduct({
+      productId: '2',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    const notCentral = makeProduct({
+      productId: '3',
+      variants: [makeVariant({ sizeValue: 'XG', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, notCentral, central]);
+
+    expect(result.map((r) => r.productId)).toEqual(['2', '3']);
+  });
+
+  it('mesmo cenário com grade numérica; comparação de tamanho é trim/case-insensitive (Test 14 - nível 3, grade numérica)', () => {
+    const source = makeProduct({ productId: '1' });
+    const central = makeProduct({
+      productId: '2',
+      variants: [makeVariant({ sizeValue: '38', stockTotal: 5 })],
+    });
+    const notCentral = makeProduct({
+      productId: '3',
+      variants: [makeVariant({ sizeValue: '44', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, notCentral, central]);
+    expect(result.map((r) => r.productId)).toEqual(['2', '3']);
+
+    const trimmedLowercase = makeProduct({
+      productId: '4',
+      variants: [makeVariant({ sizeValue: ' p ', stockTotal: 5 })],
+    });
+    const [recommendation] = recommendForProduct('1', [source, trimmedLowercase]);
+    expect(recommendation.centralSizesStock).toBe(5);
+  });
+
+  it('empate nos 3 níveis: desempate final por productId numérico ascendente, estável sob reexecução e inversão da entrada (Test 15 / RULE-02)', () => {
+    const source = makeProduct({ productId: '1' });
+    const variants = () => [makeVariant({ sizeValue: 'P', stockTotal: 5 })];
+    const productA = makeProduct({ productId: '30', variants: variants() });
+    const productB = makeProduct({ productId: '10', variants: variants() });
+    const productC = makeProduct({ productId: '20', variants: variants() });
+
+    const catalog = [source, productA, productB, productC];
+    const reversedCatalog = [source, productC, productB, productA];
+
+    const firstRun = recommendForProduct('1', catalog);
+    const secondRun = recommendForProduct('1', catalog);
+    const reversedRun = recommendForProduct('1', reversedCatalog);
+
+    expect(firstRun.map((r) => r.productId)).toEqual(['10', '20', '30']);
+    expect(firstRun).toEqual(secondRun);
+    expect(firstRun).toEqual(reversedRun);
+  });
+
+  it('não muta catalogProducts nem os arrays variants dos fixtures (Test 16)', () => {
+    const source = makeProduct({
+      productId: '1',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 3 })],
+    });
+    const candidate = makeProduct({
+      productId: '2',
+      variants: [makeVariant({ sizeValue: 'M', stockTotal: 7 })],
+    });
+    const catalog = [source, candidate];
+    const catalogBefore = JSON.parse(JSON.stringify(catalog));
+
+    recommendForProduct('1', catalog);
+
+    expect(catalog).toEqual(catalogBefore);
+  });
+});
