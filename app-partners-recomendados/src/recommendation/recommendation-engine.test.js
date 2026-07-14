@@ -6,7 +6,7 @@
 // deste MESMO plano 03-01 (Task 1: Tests 1-10; Task 2: Tests 11-16, cascata D-13).
 //
 // Fixtures in-file com `fabricTagCanonical` preenchido manualmente (D-16) — nunca
-// lê `data/catalog.db` (catálogo real está com 0/645 tags preenchidas hoje).
+// lê o dump SQLite real do catálogo (que está com 0/645 tags preenchidas hoje).
 
 import { describe, it, expect } from 'vitest';
 import { recommendForProduct, MAX_RECOMMENDATIONS } from './recommendation-engine.js';
