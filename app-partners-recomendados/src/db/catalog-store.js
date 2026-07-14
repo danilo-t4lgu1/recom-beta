@@ -77,6 +77,106 @@ const selectCanonicalMap = db.prepare(
   `SELECT raw_tag, canonical_value FROM fabric_tag_canonical_map`
 );
 
+// 03-02: leitura do snapshot real para o motor de recomendação (D-17).
+const selectLatestSuccessfulRun = db.prepare(
+  `SELECT id FROM ingestion_runs WHERE status = 'success' ORDER BY id DESC LIMIT 1`
+);
+
+const selectSnapshotsForRun = db.prepare(
+  `SELECT s.product_id AS product_id, s.fabric_tag_canonical AS fabric_tag_canonical,
+     s.has_available_grade AS has_available_grade, p.name AS name
+   FROM catalog_snapshots s
+   JOIN products p ON p.id = s.product_id
+   WHERE s.run_id = @runId
+   ORDER BY s.product_id`
+);
+
+const selectVariantsForRun = db.prepare(
+  `SELECT id, product_id, color_value, size_value, stock_total
+   FROM variants
+   WHERE last_seen_run_id = @runId
+   ORDER BY product_id, id`
+);
+
+/**
+ * Lê o snapshot completo do último run de ingestão com status 'success' e o
+ * materializa no shape `CatalogProductEntry` consumido produto a produto por
+ * `recommendForProduct` (D-17, `recommendation-engine.js`). NÃO filtra
+ * elegibilidade aqui — `fabricTagCanonical` nulo, `hasAvailableGrade` falso, etc.
+ * são deixados intactos no retorno; é o motor (D-15) quem decide o que é
+ * elegível, nunca esta função de leitura.
+ *
+ * `colorValue` vem da PRIMEIRA variante do produto (ordem determinística de
+ * `selectVariantsForRun`, `ORDER BY product_id, id`) na tabela `variants`, e
+ * NÃO de `catalog_snapshots.color_value` (Claude's Discretion / IN-03 do
+ * 03-CONTEXT.md): `catalog_snapshots.color_value` é derivada apenas da
+ * primeira variante retornada pela API Nuvemshop no momento da ingestão e é
+ * sabidamente não confiável para produtos multi-cor; `variants.color_value`
+ * tem a granularidade correta por variante. Hoje (0 produtos multi-cor no
+ * catálogo real) os dois valores coincidem na prática, mas a fonte escolhida
+ * é a robusta.
+ *
+ * Nunca mistura runs: resolve o `run_id` mais recente com `status = 'success'`
+ * via `selectLatestSuccessfulRun`, e tanto os snapshots quanto as variantes são
+ * filtrados por esse mesmo `run_id`/`last_seen_run_id` — `products`/`variants`
+ * são upsert de estado mais recente, `catalog_snapshots` é append-only por run
+ * (ver header do arquivo), então o filtro por run garante que variantes de
+ * produtos que saíram do catálogo em runs anteriores não vazem para o
+ * snapshot atual.
+ *
+ * Se não houver nenhum run com status 'success' ainda, retorna `[]` (mesmo
+ * padrão de `getCanonicalMap` com tabela vazia — comportamento esperado antes
+ * da primeira ingestão bem-sucedida, nunca lança).
+ *
+ * @returns {Array<{
+ *   productId: string,
+ *   name: string|null,
+ *   colorValue: string|null,
+ *   fabricTagCanonical: string|null,
+ *   hasAvailableGrade: boolean,
+ *   variants: Array<{ variantId: string, sizeValue: string|null, stockTotal: number }>
+ * }>}
+ */
+export function getLatestSnapshotProducts() {
+  const latestRun = selectLatestSuccessfulRun.get();
+  if (!latestRun) return [];
+
+  const runId = latestRun.id;
+  const snapshotRows = selectSnapshotsForRun.all({ runId });
+  const variantRows = selectVariantsForRun.all({ runId });
+
+  // Ordem determinística de selectVariantsForRun (ORDER BY product_id, id) garante
+  // que a primeira ocorrência de cada product_id neste loop seja a "primeira
+  // variante" per IN-03 — sem necessidade de um segundo lookup/find.
+  const variantsByProduct = new Map();
+  const firstColorByProduct = new Map();
+  for (const row of variantRows) {
+    const productId = String(row.product_id);
+    if (!variantsByProduct.has(productId)) {
+      variantsByProduct.set(productId, []);
+      firstColorByProduct.set(productId, row.color_value);
+    }
+    variantsByProduct.get(productId).push({
+      variantId: String(row.id),
+      sizeValue: row.size_value,
+      stockTotal: row.stock_total,
+    });
+  }
+
+  return snapshotRows.map((row) => {
+    const productId = String(row.product_id);
+
+    return {
+      productId,
+      name: row.name,
+      colorValue: firstColorByProduct.has(productId) ? firstColorByProduct.get(productId) : null,
+      fabricTagCanonical: row.fabric_tag_canonical,
+      hasAvailableGrade: row.has_available_grade === 1,
+      variants: variantsByProduct.get(productId) || [],
+    };
+  });
+}
+
 /**
  * Abre uma nova execução de ingestão, registrando-a como 'running'. Deve sempre ser
  * fechada posteriormente via `finishIngestionRun` (sucesso ou falha), nunca deixada
