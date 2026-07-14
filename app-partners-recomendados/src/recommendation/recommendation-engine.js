@@ -14,10 +14,18 @@
 // deste motor, enquanto a planilha de tecidos não é importada. Downstream agents
 // NÃO devem adicionar esse fallback ao código.
 //
-// Desempate (D-13/D-14, implementado na Task 2 deste plano): cascata de estoque
-// em 3 níveis (estoque total → distribuição entre tamanhos → estoque em tamanhos
-// centrais). Não existe conceito de "Grupo" (D-14) — a cascata é o critério de
-// negócio completo e final.
+// Desempate (D-13/D-14): cascata de estoque em 3 níveis, implementada como três
+// comparadores nomeados — `compareByTotalStock` (estoque total → nível 1),
+// `compareBySizesWithStock` (distribuição entre tamanhos → nível 2),
+// `compareByCentralSizesStock` (estoque em tamanhos centrais → nível 3). Não
+// existe conceito de "Grupo" (D-14) — a cascata é o critério de negócio completo
+// e final. O passo final por productId (`compareByProductIdAsc`) NÃO é critério
+// de negócio: é só uma guarda de determinismo (RULE-02) para que empates exatos
+// nos três níveis produzam sempre a mesma ordem, independente da ordem de entrada
+// do snapshot (03-CONTEXT.md classifica esse empate como "muito improvável" na
+// prática). Nenhum campo textual de "motivo do desempate" é incluído — os três
+// números D-18 (`stockTotal`, `sizesWithStock`, `centralSizesStock`) já tornam o
+// ranking auditável (decisão à discretion, 03-CONTEXT.md deixa o campo opcional).
 //
 // Formato (D-17/D-18): chamada produto a produto (`recommendForProduct`), retorna
 // objetos ricos (não apenas IDs) com os números usados no desempate, para a
@@ -139,18 +147,78 @@ function buildRecommendation(candidate) {
 }
 
 /**
+ * Nível 1 da cascata D-13: maior estoque total primeiro.
+ * @param {Recommendation} a
+ * @param {Recommendation} b
+ * @returns {number}
+ */
+function compareByTotalStock(a, b) {
+  return b.stockTotal - a.stockTotal;
+}
+
+/**
+ * Nível 2 da cascata D-13: mais tamanhos com estoque > 0 primeiro.
+ * @param {Recommendation} a
+ * @param {Recommendation} b
+ * @returns {number}
+ */
+function compareBySizesWithStock(a, b) {
+  return b.sizesWithStock - a.sizesWithStock;
+}
+
+/**
+ * Nível 3 da cascata D-13: maior estoque em tamanhos centrais primeiro
+ * (P/M/G ou 36/38/40, ambas as convenções já resolvidas por `buildRecommendation`).
+ * @param {Recommendation} a
+ * @param {Recommendation} b
+ * @returns {number}
+ */
+function compareByCentralSizesStock(a, b) {
+  return b.centralSizesStock - a.centralSizesStock;
+}
+
+/**
+ * Guarda de determinismo (RULE-02), NÃO critério de negócio (D-14): quando os
+ * três níveis da cascata D-13 empatam exatamente, desempata por productId
+ * numérico ascendente, garantindo a mesma saída independente da ordem de
+ * entrada do snapshot.
+ * @param {Recommendation} a
+ * @param {Recommendation} b
+ * @returns {number}
+ */
+function compareByProductIdAsc(a, b) {
+  return Number(a.productId) - Number(b.productId);
+}
+
+/**
+ * Composição completa da cascata D-13 (níveis 1-3) + guarda de determinismo
+ * final (RULE-02). Cada nível só decide quando o(s) anterior(es) empatam
+ * exatamente (curto-circuito via `||`, comparadores retornam 0 em empate).
+ * @param {Recommendation} a
+ * @param {Recommendation} b
+ * @returns {number}
+ */
+function compareRecommendations(a, b) {
+  return (
+    compareByTotalStock(a, b) ||
+    compareBySizesWithStock(a, b) ||
+    compareByCentralSizesStock(a, b) ||
+    compareByProductIdAsc(a, b)
+  );
+}
+
+/**
  * Motor de recomendação determinístico (RULE-01/RULE-02). Recebe um `productId`
  * e o array de produtos do snapshot (D-17, chamada produto a produto) e devolve
  * até `maxRecommendations` recomendações (D-18) elegíveis: mesma cor, mesmo
- * tecido canônico (D-15, sem fallback D-16), grade de estoque disponível.
- * Entrada malformada, produto-fonte ausente, ou produto-fonte sem tecido
- * canônico/cor (D-15) retornam `[]`, nunca lança (convenção T-02-06). Função
- * pura: não muta `catalogProducts` nem os objetos de entrada, sem
- * relógio/aleatoriedade/rede/importações.
- *
- * Nesta implementação (Task 1 do plano 03-01) a saída preserva a ordem de
- * entrada dos elegíveis, cortada em `maxRecommendations` — a cascata de
- * desempate D-13 completa é implementada na Task 2 deste mesmo plano.
+ * tecido canônico (D-15, sem fallback D-16), grade de estoque disponível — na
+ * ordem da cascata D-13 (`compareRecommendations`). Entrada malformada,
+ * produto-fonte ausente, ou produto-fonte sem tecido canônico/cor (D-15)
+ * retornam `[]`, nunca lança (convenção T-02-06). Função pura: ordena uma cópia
+ * do array de candidatos (nunca muta `catalogProducts` nem os objetos de
+ * entrada), sem relógio/aleatoriedade/rede/importações. O corte em
+ * `maxRecommendations` acontece APÓS a ordenação completa (RULE-01 seleciona os
+ * melhores da cascata, não os primeiros da entrada).
  * @param {string} productId
  * @param {CatalogProductEntry[]} catalogProducts
  * @param {{ maxRecommendations?: number }} [options]
@@ -172,5 +240,5 @@ export function recommendForProduct(
     .filter((candidate) => isEligibleCandidate(source, candidate))
     .map(buildRecommendation);
 
-  return recommendations.slice(0, maxRecommendations);
+  return [...recommendations].sort(compareRecommendations).slice(0, maxRecommendations);
 }
