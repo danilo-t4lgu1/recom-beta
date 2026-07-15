@@ -11,7 +11,7 @@
 import { listCategories, listProducts, getMetafields } from '../nuvemshop-client/client.js';
 import { AdaptiveRateLimiter } from '../rate-limit/adaptive-limiter.js';
 import { hasAvailableGrade, getVariantStock } from './stock-availability.js';
-import { auditFabricTags } from './fabric-taxonomy.js';
+import { auditFabricTags, resolveFabricTagFromTags } from './fabric-taxonomy.js';
 import { startIngestionRun, persistIngestionBatch, finishIngestionRun, getCanonicalMap } from '../db/catalog-store.js';
 
 const MIN_SIZES_IN_STOCK = 3; // D-04: regra de negócio nomeada, nunca inline
@@ -190,12 +190,12 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       }
 
       const rawTags = ((product.tags || '').split(',').map((t) => t.trim()).filter(Boolean));
-      // CR-01: product.tags mistura tags de marketing/SEO com tags de tecido (uma vez
-      // que a planilha D-07 for importada) sem nenhuma ordem/posição garantida. Só
-      // tratamos uma tag como "a tag de tecido" quando ela já é uma chave conhecida no
-      // canonicalMap — nunca assumimos rawTags[0] arbitrariamente.
-      const fabricTagRaw = rawTags.find((tag) => canonicalMap.has(tag)) || null;
-      const fabricTagCanonical = fabricTagRaw ? canonicalMap.get(fabricTagRaw) : null;
+      // D-32 (2026-07-15): product.tags mistura tags de marketing/SEO com tags de
+      // tecido, em strings compostas ("vestido malha midi"), sem nenhuma
+      // ordem/posição garantida. Resolvido por contenção de palavra-chave
+      // (resolveFabricTagFromTags), não mais por igualdade exata contra
+      // canonicalMap — ver fabric-taxonomy.js para a justificativa completa.
+      const { fabricTagRaw, fabricTagCanonical } = resolveFabricTagFromTags(rawTags);
 
       // WR-06/IN-03: mesmo mapeamento por nome de atributo usado no loop de variantes
       // acima, aplicado à primeira variante retornada pela API — este valor continua
