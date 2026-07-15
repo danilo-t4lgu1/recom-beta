@@ -20,12 +20,27 @@ const SCHEMA_PATH = join(__dirname, 'schema.sql');
 // WR-04: resolve relativo ao módulo (não a process.cwd()) — consistente com
 // SCHEMA_PATH acima — e garante que o diretório exista antes de abrir o arquivo,
 // já que better-sqlite3 não cria diretórios pai automaticamente.
-const DB_DIR = join(__dirname, '..', '..', 'data');
+// CATALOG_DB_DIR (opcional): override existe SOMENTE para permitir que testes de
+// integração (catalog-store.test.js) apontem para um diretório temporário isolado,
+// nunca tocando o data/catalog.db real de desenvolvimento. Comportamento em
+// produção/uso normal (variável ausente) é idêntico ao anterior.
+const DB_DIR = process.env.CATALOG_DB_DIR || join(__dirname, '..', '..', 'data');
 mkdirSync(DB_DIR, { recursive: true });
 
 const db = new Database(join(DB_DIR, 'catalog.db'));
 db.pragma('journal_mode = WAL');
 db.exec(readFileSync(SCHEMA_PATH, 'utf-8'));
+
+// Migração idempotente (Pitfall 2 do 03.1-RESEARCH.md): `CREATE TABLE IF NOT EXISTS`
+// acima é NO-OP contra um banco já existente no disco — não adiciona colunas novas
+// retroativamente. Esta checagem roda TODA VEZ que o módulo abre o banco (mesma
+// disciplina de idempotência do CREATE TABLE IF NOT EXISTS), não apenas na primeira.
+const catalogSnapshotColumns = db.prepare('PRAGMA table_info(catalog_snapshots)').all();
+const hasGroupColumn = catalogSnapshotColumns.some((c) => c.name === 'product_group_canonical');
+if (!hasGroupColumn) {
+  db.exec('ALTER TABLE catalog_snapshots ADD COLUMN category_raw TEXT');
+  db.exec('ALTER TABLE catalog_snapshots ADD COLUMN product_group_canonical TEXT');
+}
 
 const insertProduct = db.prepare(
   `INSERT INTO products (id, name, handle, canonical_url, last_seen_run_id)
@@ -45,9 +60,11 @@ const insertVariant = db.prepare(
 const insertSnapshot = db.prepare(
   `INSERT INTO catalog_snapshots
      (run_id, product_id, has_available_grade, sizes_in_stock_count,
-      fabric_tag_raw, fabric_tag_canonical, color_value, snapshot_at)
+      fabric_tag_raw, fabric_tag_canonical, color_value, category_raw,
+      product_group_canonical, snapshot_at)
    VALUES (@runId, @productId, @hasAvailableGrade, @sizesInStockCount,
-      @fabricTagRaw, @fabricTagCanonical, @colorValue, @snapshotAt)`
+      @fabricTagRaw, @fabricTagCanonical, @colorValue, @categoryRaw,
+      @productGroupCanonical, @snapshotAt)`
 );
 
 const insertFabricAudit = db.prepare(
@@ -84,7 +101,8 @@ const selectLatestSuccessfulRun = db.prepare(
 
 const selectSnapshotsForRun = db.prepare(
   `SELECT s.product_id AS product_id, s.fabric_tag_canonical AS fabric_tag_canonical,
-     s.has_available_grade AS has_available_grade, p.name AS name
+     s.has_available_grade AS has_available_grade, s.product_group_canonical AS product_group_canonical,
+     p.name AS name
    FROM catalog_snapshots s
    JOIN products p ON p.id = s.product_id
    WHERE s.run_id = @runId
@@ -128,11 +146,19 @@ const selectVariantsForRun = db.prepare(
  * padrão de `getCanonicalMap` com tabela vazia — comportamento esperado antes
  * da primeira ingestão bem-sucedida, nunca lança).
  *
+ * `productGroupCanonical` (D-26) segue a mesma simetria de `fabricTagCanonical`: o
+ * valor já canônico (lido de `catalog_snapshots.product_group_canonical`) passa
+ * direto, `null` permanece `null`, sem filtro de elegibilidade aqui — é o motor
+ * (D-15/D-27/D-28) quem decide o que é elegível. `category_raw` é persistida na
+ * tabela para auditoria/histórico mas não é exposta neste shape (mesmo padrão de
+ * `fabric_tag_raw`, que também não aparece em `CatalogProductEntry`).
+ *
  * @returns {Array<{
  *   productId: string,
  *   name: string|null,
  *   colorValue: string|null,
  *   fabricTagCanonical: string|null,
+ *   productGroupCanonical: string|null,
  *   hasAvailableGrade: boolean,
  *   variants: Array<{ variantId: string, sizeValue: string|null, stockTotal: number }>
  * }>}
@@ -171,6 +197,7 @@ export function getLatestSnapshotProducts() {
       name: row.name,
       colorValue: firstColorByProduct.has(productId) ? firstColorByProduct.get(productId) : null,
       fabricTagCanonical: row.fabric_tag_canonical,
+      productGroupCanonical: row.product_group_canonical,
       hasAvailableGrade: row.has_available_grade === 1,
       variants: variantsByProduct.get(productId) || [],
     };

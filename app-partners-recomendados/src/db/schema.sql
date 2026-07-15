@@ -10,6 +10,10 @@
 --   tags de tecido (DATA-03) — regenerada a cada execução, nunca só na primeira vez.
 -- recommendation_baseline: registro informativo dos Metafields de recomendação atuais
 --   (DATA-02), sem lógica de drift (D-12).
+-- catalog_snapshots.category_raw / product_group_canonical: campos por-produto do
+--   Grupo de Produtos (D-26/D-33, Fase 03.1) — bancos já existentes (sem essas
+--   colunas) recebem migração idempotente em catalog-store.js (Pitfall 2 do
+--   03.1-RESEARCH.md), não apenas este CREATE TABLE.
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +53,8 @@ CREATE TABLE IF NOT EXISTS catalog_snapshots (
   fabric_tag_raw TEXT,
   fabric_tag_canonical TEXT,     -- NULL se não mapeado (D-09: fora do motor, não erro)
   color_value TEXT,
+  category_raw TEXT,             -- nome bruto da categoria, ex: "Blusas" (D-26)
+  product_group_canonical TEXT,  -- 'Look Inteiro' | 'Partes de Cima' | 'Partes de Baixo' | NULL (D-26)
   snapshot_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_product ON catalog_snapshots(product_id, snapshot_at);
