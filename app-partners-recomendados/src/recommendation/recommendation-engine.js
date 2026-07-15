@@ -173,9 +173,15 @@ function buildSortedPool(source, catalog, targetGroup, { requireFabric }) {
 
 /**
  * Compõe a cota fixa 4+4 (D-28) entre o pool mesmo-grupo (`samePoolSorted`) e
- * o pool cruzado (`crossPoolSorted`). Caso base (Plano 03.1-02, Task 1): SEM
- * backfill ainda — o backfill simétrico (D-29) é adicionado na Task 2 deste
- * mesmo plano, estendendo esta função sem quebrar o caso base aqui escrito.
+ * o pool cruzado (`crossPoolSorted`), com backfill simétrico (D-29): quando um
+ * lado tem menos elegíveis que `quota`, o outro lado preenche os slots vazios
+ * usando SEU PRÓPRIO restante (o pool já ordenado pela cascata D-13, a partir
+ * de onde sua própria cota parou), respeitando seu próprio critério de
+ * elegibilidade — NUNCA inventando candidato inelegível (D-29). Se a soma de
+ * `samePoolSorted.length + crossPoolSorted.length` for menor que `cap`, o
+ * resultado final tem menos que `cap` itens — esperado e correto (D-29). Ordem
+ * final obrigatória (D-35): bloco mesmo-grupo completo (cota + seu backfill)
+ * antes do bloco cruzado completo (cota + seu backfill).
  * @param {Recommendation[]} samePoolSorted
  * @param {Recommendation[]} crossPoolSorted
  * @param {{ quota?: number, cap?: number }} [options]
@@ -186,7 +192,18 @@ function composeGroupQuota(
   crossPoolSorted,
   { quota = GROUP_QUOTA_PER_SIDE, cap = MAX_RECOMMENDATIONS } = {}
 ) {
-  return [...samePoolSorted.slice(0, quota), ...crossPoolSorted.slice(0, quota)].slice(0, cap);
+  const same = samePoolSorted.slice(0, quota);
+  const cross = crossPoolSorted.slice(0, quota);
+
+  const sameShortfall = quota - same.length;
+  const crossShortfall = quota - cross.length;
+
+  const crossBackfill =
+    crossShortfall > 0 ? samePoolSorted.slice(quota, quota + crossShortfall) : [];
+  const sameBackfill =
+    sameShortfall > 0 ? crossPoolSorted.slice(quota, quota + sameShortfall) : [];
+
+  return [...same, ...sameBackfill, ...cross, ...crossBackfill].slice(0, cap);
 }
 
 /**
