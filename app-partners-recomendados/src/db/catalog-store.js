@@ -283,3 +283,16 @@ export function finishIngestionRun({ runId, status, productsRead }) {
     productsRead,
   });
 }
+
+/**
+ * Fecha a conexão SQLite subjacente. Uso exclusivo de testes de integração
+ * (`catalog-store.test.js`), que precisam liberar o handle nativo do arquivo
+ * antes de remover o diretório temporário — no Windows, `better-sqlite3` retém
+ * o lock do arquivo até `close()` explícito, mesmo após `vi.resetModules()`.
+ * Nunca chamado em uso normal do módulo (o processo mantém a conexão aberta
+ * durante todo o ciclo de vida do job de ingestão).
+ * @returns {void}
+ */
+export function closeDbForTests() {
+  db.close();
+}
