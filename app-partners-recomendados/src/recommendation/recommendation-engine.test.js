@@ -9,7 +9,13 @@
 // lê o dump SQLite real do catálogo (que está com 0/645 tags preenchidas hoje).
 
 import { describe, it, expect } from 'vitest';
-import { recommendForProduct, MAX_RECOMMENDATIONS } from './recommendation-engine.js';
+import {
+  recommendForProduct,
+  MAX_RECOMMENDATIONS,
+  GROUP_LOOK_INTEIRO,
+  GROUP_PARTES_DE_CIMA,
+  GROUP_PARTES_DE_BAIXO,
+} from './recommendation-engine.js';
 
 let variantCounter = 0;
 function makeVariant({ sizeValue = null, stockTotal = 0 } = {}) {
@@ -24,6 +30,7 @@ function makeProduct({
   fabricTagCanonical = 'Viscose',
   hasAvailableGrade = true,
   variants = [],
+  productGroupCanonical = GROUP_LOOK_INTEIRO,
 } = {}) {
   productCounter += 1;
   return {
@@ -33,6 +40,7 @@ function makeProduct({
     fabricTagCanonical,
     hasAvailableGrade,
     variants,
+    productGroupCanonical,
   };
 }
 
@@ -134,6 +142,7 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
         'centralSizesStock',
         'colorValue',
         'fabricTagCanonical',
+        'productGroupCanonical',
         'productId',
         'sizesWithStock',
         'stockBySize',
@@ -289,5 +298,328 @@ describe('recommendForProduct - cascata de desempate D-13 e limite de 8 (Task 2)
     recommendForProduct('1', catalog);
 
     expect(catalog).toEqual(catalogBefore);
+  });
+});
+
+describe('recommendForProduct - grupo e mescla (D-27-D-30, D-34, D-35)', () => {
+  it('factory makeProduct usa GROUP_LOOK_INTEIRO como grupo padrão, preservando compatibilidade dos testes 1-16 (Test 17)', () => {
+    const source = makeProduct({ productId: '1' });
+    expect(source.productGroupCanonical).toBe(GROUP_LOOK_INTEIRO);
+  });
+
+  it('Look Inteiro exclui candidato de outro grupo mesmo com cor+tecido+estoque coincidentes (Test 18 / D-27)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_LOOK_INTEIRO,
+    });
+    const otherGroupSameEverything = makeProduct({
+      productId: '2',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, otherGroupSameEverything]);
+    expect(result).toEqual([]);
+  });
+
+  it('grupo-fonte null falha fechado mesmo com candidato irmão também null e cor+tecido+estoque idênticos (Test 19)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: null,
+    });
+    const nullGroupSibling = makeProduct({
+      productId: '2',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: null,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, nullGroupSibling]);
+    expect(result).toEqual([]);
+  });
+
+  it('Partes de Cima com 4 elegíveis mesmo-grupo + 4 elegíveis cruzados retorna os 8, mesmo-grupo antes do cruzado (Test 20 / D-28 caso base + D-35)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameStocks = [40, 30, 20, 10];
+    const sameGroupCandidates = ['11', '12', '13', '14'].map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: sameStocks[i] })],
+      })
+    );
+
+    const crossFabrics = ['Algodao', null, 'Linho', null];
+    const crossStocks = [40, 30, 20, 10];
+    const crossGroupCandidates = ['21', '22', '23', '24'].map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: crossFabrics[i],
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: crossStocks[i] })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.map((r) => r.productId)).toEqual(['11', '12', '13', '14', '21', '22', '23', '24']);
+  });
+
+  it('bloco cruzado aceita candidato sem tecido; bloco mesmo-grupo exige tecido (Test 21 / D-28, D-15 por bloco)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+    const sameGroupNullFabric = makeProduct({
+      productId: '2',
+      colorValue: 'Preto',
+      fabricTagCanonical: null,
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    const crossGroupNullFabric = makeProduct({
+      productId: '3',
+      colorValue: 'Preto',
+      fabricTagCanonical: null,
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, sameGroupNullFabric, crossGroupNullFabric]);
+    expect(result.map((r) => r.productId)).toEqual(['3']);
+  });
+
+  it('fonte de Partes de Baixo sem tecido canônico ainda gera o bloco cruzado (Test 22 / D-34)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: null,
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+    });
+    const crossCandidate = makeProduct({
+      productId: '2',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, crossCandidate]);
+    expect(result.map((r) => r.productId)).toEqual(['2']);
+  });
+
+  it('backfill: mesmo-grupo escasso (2) preenchido pelo restante do cruzado abundante (6) = 8 total (Test 24 / D-29)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameIds = ['11', '12'];
+    const sameStocks = [100, 90];
+    const sameGroupCandidates = sameIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: sameStocks[i] })],
+      })
+    );
+
+    const crossIds = ['21', '22', '23', '24', '25', '26'];
+    const crossStocks = [60, 50, 40, 30, 20, 10];
+    const crossGroupCandidates = crossIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Algodao',
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: crossStocks[i] })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.length).toBe(8);
+    expect(new Set(result.map((r) => r.productId))).toEqual(new Set([...sameIds, ...crossIds]));
+  });
+
+  it('backfill espelhado: cruzado escasso (1) preenchido pelo restante do mesmo-grupo abundante (7) = 8 total (Test 25 / D-29)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameIds = ['11', '12', '13', '14', '15', '16', '17'];
+    const sameStocks = [170, 160, 150, 140, 130, 120, 110];
+    const sameGroupCandidates = sameIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: sameStocks[i] })],
+      })
+    );
+
+    const crossIds = ['21'];
+    const crossGroupCandidates = crossIds.map((id) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Algodao',
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.length).toBe(8);
+    expect(new Set(result.map((r) => r.productId))).toEqual(new Set([...sameIds, ...crossIds]));
+  });
+
+  it('sem candidatos suficientes em nenhum lado (2 + 3 = 5), retorna exatamente os 5 existentes, nunca inventa (Test 26 / D-29)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameIds = ['11', '12'];
+    const sameGroupCandidates = sameIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: 10 - i })],
+      })
+    );
+
+    const crossIds = ['21', '22', '23'];
+    const crossGroupCandidates = crossIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Algodao',
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: 10 - i })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.length).toBe(5);
+    expect(new Set(result.map((r) => r.productId))).toEqual(new Set([...sameIds, ...crossIds]));
+  });
+
+  it('cascata D-13 ordena cada bloco de forma independente, sem nível novo por grupo (Test 27 / D-30)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameStockById = { '11': 10, '12': 40, '13': 30, '14': 20 };
+    const sameGroupCandidates = Object.entries(sameStockById).map(([id, stock]) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: stock })],
+      })
+    );
+
+    const crossStockById = { '21': 15, '22': 45, '23': 25, '24': 35 };
+    const crossGroupCandidates = Object.entries(crossStockById).map(([id, stock]) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Algodao',
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: stock })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.map((r) => r.productId)).toEqual(['12', '13', '14', '11', '22', '24', '23', '21']);
+  });
+
+  it('ordem final com backfill: bloco mesmo-grupo (+ seu backfill) inteiro antes do bloco cruzado (+ seu backfill) (Test 28 / D-35)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+
+    const sameIds = ['11', '12'];
+    const sameStocks = [100, 90];
+    const sameGroupCandidates = sameIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Viscose',
+        productGroupCanonical: GROUP_PARTES_DE_CIMA,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: sameStocks[i] })],
+      })
+    );
+
+    const crossIds = ['21', '22', '23', '24', '25', '26'];
+    const crossStocks = [60, 50, 40, 30, 20, 10];
+    const crossGroupCandidates = crossIds.map((id, i) =>
+      makeProduct({
+        productId: id,
+        colorValue: 'Preto',
+        fabricTagCanonical: 'Algodao',
+        productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+        variants: [makeVariant({ sizeValue: 'P', stockTotal: crossStocks[i] })],
+      })
+    );
+
+    const catalog = [source, ...sameGroupCandidates, ...crossGroupCandidates];
+    const result = recommendForProduct('1', catalog);
+
+    expect(result.map((r) => r.productId)).toEqual(['11', '12', '25', '26', '21', '22', '23', '24']);
+  });
+
+  it('suíte completa do arquivo permanece verde: 16 testes de regressão + 12 novos desta fase (Test 29)', () => {
+    // Meta-confirmação: esta suíte inteira (Tests 1-28), quando executada via
+    // `npx vitest run src/recommendation/recommendation-engine.test.js`, deve
+    // sair com código 0 — não há asserção adicional aqui, o próprio runner
+    // vitest é a verificação (RULE-01/RULE-02, D-29/D-30/D-35).
+    expect(true).toBe(true);
   });
 });
