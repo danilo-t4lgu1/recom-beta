@@ -12,6 +12,7 @@ import { listCategories, listProducts, getMetafields } from '../nuvemshop-client
 import { AdaptiveRateLimiter } from '../rate-limit/adaptive-limiter.js';
 import { hasAvailableGrade, getVariantStock } from './stock-availability.js';
 import { auditFabricTags, resolveFabricTagFromTags } from './fabric-taxonomy.js';
+import { resolveProductGroup, extractCategoryRaw, auditProductGroups } from './product-group.js';
 import { startIngestionRun, persistIngestionBatch, finishIngestionRun, getCanonicalMap } from '../db/catalog-store.js';
 
 const MIN_SIZES_IN_STOCK = 3; // D-04: regra de negócio nomeada, nunca inline
@@ -127,22 +128,55 @@ async function readRecommendationBaseline(productId, limiter) {
 }
 
 /**
- * Orquestra uma execução completa de ingestão do catálogo: resolve categoria ->
- * pagina produtos -> calcula estoque -> audita tags -> persiste tudo em uma única
- * transação. Garante que `ingestion_runs.status` é sempre finalizado (success ou
- * failed), nunca preso em 'running'.
- * @param {{ categoryName?: string }} [params]
+ * Orquestra uma execução completa de ingestão do catálogo: resolve categoria(s) ->
+ * pagina produtos -> calcula estoque -> audita tags/grupo -> persiste tudo em uma
+ * única transação. Garante que `ingestion_runs.status` é sempre finalizado (success
+ * ou failed), nunca preso em 'running'.
+ *
+ * D-33/Pitfall 1 (03.1-RESEARCH.md): `categoryNames` (array), quando presente e
+ * não-vazio, tem prioridade sobre `categoryName` e permite ingerir MÚLTIPLAS
+ * categorias sob o MESMO `run_id` — corrige a limitação estrutural em que ingerir
+ * "Vestidos" e depois "Blusas" em chamadas separadas fazia o segundo run se tornar
+ * "o mais recente" e os produtos de Vestidos desaparecerem do snapshot de trabalho
+ * lido por `getLatestSnapshotProducts()` (mesmo continuando nas tabelas via upsert).
+ * Chamadas antigas (`runIngestion({ categoryName: 'Vestidos' })`, sem `categoryNames`)
+ * continuam funcionando sem mudança (retrocompatibilidade).
+ * @param {{ categoryName?: string, categoryNames?: string[] }} [params]
  * @returns {Promise<{ runId: number, productsRead: number, status: 'success',
  *   availableCount: number, distinctTagCount: number, unmappedTagCount: number,
- *   baselineNonNullCount: number }>}
+ *   unmappedCategoryCount: number, baselineNonNullCount: number }>}
  */
-export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
+export async function runIngestion({ categoryName = 'Vestidos', categoryNames } = {}) {
   const limiter = new AdaptiveRateLimiter();
-  const category = await resolveCategoryIdByName(categoryName, limiter);
+  const targetCategoryNames =
+    Array.isArray(categoryNames) && categoryNames.length > 0 ? categoryNames : [categoryName];
 
-  const allProducts = await listAllProductsInCategory(category.id, limiter);
+  const resolvedCategories = [];
+  for (const targetName of targetCategoryNames) {
+    const resolved = await resolveCategoryIdByName(targetName, limiter);
+    resolvedCategories.push(resolved);
+  }
 
-  const runId = startIngestionRun({ categoryId: category.id, categoryName: category.name });
+  // D-33: mescla produtos de TODAS as categorias resolvidas em um único array,
+  // deduplicando por String(product.id) via Map (T-03.1-04) — defesa contra
+  // sobreposição entre categorias mescladas, mesmo que D-26 confirme que não é
+  // esperado hoje (cada produto pertence a uma única categoria).
+  const productsById = new Map();
+  for (const resolvedCategory of resolvedCategories) {
+    const categoryProducts = await listAllProductsInCategory(resolvedCategory.id, limiter);
+    for (const product of categoryProducts) {
+      productsById.set(String(product.id), product);
+    }
+  }
+  const allProducts = Array.from(productsById.values());
+
+  // Uma única ingestion_run para todas as categorias combinadas (D-33) — categoryId/
+  // categoryName viram strings unidas por vírgula, sem exigir mudança de schema em
+  // ingestion_runs.
+  const runId = startIngestionRun({
+    categoryId: resolvedCategories.map((c) => c.id).join(','),
+    categoryName: resolvedCategories.map((c) => c.name).join(', '),
+  });
 
   try {
     // DATA-03: auditoria de tags de tecido roda UMA VEZ para todo o lote, não por
@@ -151,6 +185,10 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
     // funcione assim que a planilha D-07 for importada (WR-01).
     const canonicalMap = getCanonicalMap();
     const { frequency, unmapped } = auditFabricTags(allProducts, canonicalMap);
+    // RULE-01/D-26: auditoria de Grupo de Produtos roda UMA VEZ para todo o lote
+    // mesclado, mesmo padrão de auditFabricTags acima. Categoria não mapeada é
+    // INESPERADA (D-26 confirma exaustividade), nunca silenciosa (Pitfall 3).
+    const { unmapped: unmappedCategories } = auditProductGroups(allProducts);
 
     const snapshotAt = new Date().toISOString();
     const products = [];
@@ -197,6 +235,14 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       // canonicalMap — ver fabric-taxonomy.js para a justificativa completa.
       const { fabricTagRaw, fabricTagCanonical } = resolveFabricTagFromTags(rawTags);
 
+      // RULE-01/D-26: extração de categoria bruta + resolução de grupo canônico, campo
+      // já presente na resposta atual de listProducts() (product.categories[]), nenhuma
+      // chamada de rede nova. Categoria não mapeada (Pitfall 3) nunca lança —
+      // productGroupCanonical fica null, produto fora do motor até o mapeamento ser
+      // atualizado; ocorrência já auditada em unmappedCategories acima e logada abaixo.
+      const categoryRaw = extractCategoryRaw(product);
+      const productGroupCanonical = resolveProductGroup(categoryRaw);
+
       // WR-06/IN-03: mesmo mapeamento por nome de atributo usado no loop de variantes
       // acima, aplicado à primeira variante retornada pela API — este valor continua
       // sendo "a cor da primeira variante retornada", não necessariamente
@@ -214,6 +260,8 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
         fabricTagRaw,
         fabricTagCanonical,
         colorValue: snapshotColorValue,
+        categoryRaw,
+        productGroupCanonical,
         snapshotAt,
       });
 
@@ -235,6 +283,17 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       });
     }
 
+    // Pitfall 3: categoria não mapeada nunca é silenciosa — cada ocorrência é
+    // logada explicitamente, citando que produtos dessa categoria ficam sem grupo
+    // (fora do motor) até o mapeamento em product-group.js ser atualizado.
+    for (const unmappedCategory of unmappedCategories) {
+      console.warn(
+        `runIngestion: categoria "${unmappedCategory}" não mapeada para nenhum grupo canônico ` +
+          '(product-group.js) — produtos desta categoria ficam com productGroupCanonical null ' +
+          '(fora do motor de recomendação) até o mapeamento ser atualizado.'
+      );
+    }
+
     persistIngestionBatch({
       runId,
       records: { products, variants, snapshots, fabricAudits, recommendationBaselines },
@@ -249,6 +308,7 @@ export async function runIngestion({ categoryName = 'Vestidos' } = {}) {
       availableCount,
       distinctTagCount: frequency.size,
       unmappedTagCount: unmapped.size,
+      unmappedCategoryCount: unmappedCategories.size,
       baselineNonNullCount,
     };
   } catch (error) {
