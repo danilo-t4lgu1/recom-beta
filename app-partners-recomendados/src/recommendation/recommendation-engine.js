@@ -1,4 +1,5 @@
-// Motor de recomendação determinístico (RULE-01/RULE-02, D-13, D-15, D-16, D-17, D-18).
+// Motor de recomendação determinístico (RULE-01/RULE-02, D-13, D-15, D-16, D-17,
+// D-18, D-26 a D-31, D-34, D-35).
 //
 // Módulo de domínio puro, no formato de `stock-availability.js`: funções nomeadas,
 // sem estado, sem I/O. Não importa nenhum outro módulo do projeto — o motor
@@ -8,35 +9,53 @@
 // pureza estrutural (zero imports) exigida por RULE-02/Success Criteria #4.
 //
 // Elegibilidade estrita (D-15): tanto a fonte quanto os candidatos precisam ter
-// `fabricTagCanonical` não-nulo. NÃO existe modo alternativo de elegibilidade por
-// cor+estoque quando o tecido está ausente (D-16) — isso foi avaliado e rejeitado
-// como regra permanente de negócio; é só um workaround manual do usuário fora
-// deste motor, enquanto a planilha de tecidos não é importada. Downstream agents
-// NÃO devem adicionar esse fallback ao código.
+// `fabricTagCanonical` não-nulo QUANDO o bloco exige tecido (mesmo-grupo). NÃO
+// existe modo alternativo de elegibilidade por cor+estoque quando o tecido está
+// ausente no bloco mesmo-grupo (D-16) — isso foi avaliado e rejeitado como regra
+// permanente de negócio; é só um workaround manual do usuário fora deste motor,
+// enquanto a planilha de tecidos não é importada. Downstream agents NÃO devem
+// adicionar esse fallback ao bloco mesmo-grupo. O bloco cruzado (D-28) é a única
+// exceção deliberada: tecido nunca é considerado ali, por desenho (D-26 a D-30).
 //
 // Desempate (D-13/D-14): cascata de estoque em 3 níveis, implementada como três
 // comparadores nomeados — `compareByTotalStock` (estoque total → nível 1),
 // `compareBySizesWithStock` (distribuição entre tamanhos → nível 2),
 // `compareByCentralSizesStock` (estoque em tamanhos centrais → nível 3). Não
-// existe conceito de "Grupo" (D-14) — a cascata é o critério de negócio completo
-// e final. O passo final por productId (`compareByProductIdAsc`) NÃO é critério
-// de negócio: é só uma guarda de determinismo (RULE-02) para que empates exatos
-// nos três níveis produzam sempre a mesma ordem, independente da ordem de entrada
-// do snapshot (03-CONTEXT.md classifica esse empate como "muito improvável" na
-// prática). Nenhum campo textual de "motivo do desempate" é incluído — os três
-// números D-18 (`stockTotal`, `sizesWithStock`, `centralSizesStock`) já tornam o
-// ranking auditável (decisão à discretion, 03-CONTEXT.md deixa o campo opcional).
+// existe conceito de "Grupo" como nível de desempate (D-14, D-30) — a cascata
+// decide a ORDEM dentro de cada bloco de grupo, nunca um nível novo. O passo
+// final por productId (`compareByProductIdAsc`) NÃO é critério de negócio: é só
+// uma guarda de determinismo (RULE-02) para que empates exatos nos três níveis
+// produzam sempre a mesma ordem, independente da ordem de entrada do snapshot
+// (03-CONTEXT.md classifica esse empate como "muito improvável" na prática).
+// Nenhum campo textual de "motivo do desempate" é incluído — os três números
+// D-18 (`stockTotal`, `sizesWithStock`, `centralSizesStock`) já tornam o ranking
+// auditável (decisão à discretion, 03-CONTEXT.md deixa o campo opcional).
 //
-// Formato (D-17/D-18): chamada produto a produto (`recommendForProduct`), retorna
-// objetos ricos (não apenas IDs) com os números usados no desempate, para a
-// Fase 4 consumir como interface de dados auditável.
+// Grupo de Produtos (D-26 a D-31, D-33 a D-35, Fase 03.1): quarta dimensão de
+// elegibilidade que decide QUAL POOL de candidatos um produto-fonte pode
+// acessar. Look Inteiro (Vestidos/Macacões/Macaquinhos) é auto-contido (D-27) —
+// nunca mescla com outro grupo. Partes de Cima e Partes de Baixo mesclam entre
+// si (D-28) numa cota fixa 4+4 (`GROUP_QUOTA_PER_SIDE`) com backfill simétrico
+// quando um lado tem menos elegíveis que o outro (D-29), sempre respeitando o
+// próprio critério de cada bloco e nunca inventando candidato inelegível. As
+// constantes/funções de grupo (`GROUP_LOOK_INTEIRO`, `GROUP_PARTES_DE_CIMA`,
+// `GROUP_PARTES_DE_BAIXO`, `crossGroupOf`) são DUPLICADAS aqui a partir de
+// `product-group.js` (Plano 03.1-01) em vez de importadas — RULE-02 exige zero
+// imports no motor; o motor nunca resolve uma categoria crua, só consome
+// `productGroupCanonical` já resolvido pela ingestão.
+//
+// Formato (D-17/D-18, estendido em D-18 nesta fase com `productGroupCanonical`):
+// chamada produto a produto (`recommendForProduct`), retorna objetos ricos (não
+// apenas IDs) com os números usados no desempate, para a Fase 4 consumir como
+// interface de dados auditável.
 
 /**
  * @typedef {object} CatalogProductEntry
  * @property {string} productId - id Nuvemshop como string
  * @property {string|null} name
  * @property {string|null} colorValue - cor representativa do produto (IN-03)
- * @property {string|null} fabricTagCanonical - NULL => produto fora do motor (D-15)
+ * @property {string|null} fabricTagCanonical - NULL => produto fora do bloco mesmo-grupo (D-15); bloco cruzado nunca exige (D-28)
+ * @property {string|null} productGroupCanonical - 'Look Inteiro' | 'Partes de Cima' | 'Partes de Baixo' | null (D-26); já resolvido pela ingestão
  * @property {boolean} hasAvailableGrade - resultado D-04 persistido na ingestão
  * @property {Array<{variantId: string, sizeValue: string|null, stockTotal: number}>} variants
  */
@@ -45,7 +64,8 @@
  * @typedef {object} Recommendation
  * @property {string} productId
  * @property {string} colorValue - valor usado no match de cor
- * @property {string} fabricTagCanonical - valor usado no match de tecido
+ * @property {string|null} fabricTagCanonical - valor usado no match de tecido; pode ser null no bloco cruzado (D-28)
+ * @property {string|null} productGroupCanonical - grupo do candidato retornado (D-18 estendido)
  * @property {number} stockTotal - soma de variants[].stockTotal (nível 1 da cascata D-13)
  * @property {number} sizesWithStock - contagem de variantes com stockTotal > 0 (nível 2)
  * @property {number} centralSizesStock - soma de stockTotal nos tamanhos centrais (nível 3)
@@ -61,6 +81,32 @@ export const CENTRAL_SIZES_LETTER = ['P', 'M', 'G'];
 /** D-13 nível 3: tamanhos centrais em grade numérica. */
 export const CENTRAL_SIZES_NUMERIC = ['36', '38', '40'];
 
+// D-26: os 3 grupos canônicos de produto. DUPLICADOS de `product-group.js`
+// (Plano 03.1-01), nunca importados — RULE-02 exige zero imports no motor; o
+// motor só consome `productGroupCanonical` já resolvido pela ingestão, nunca
+// uma categoria crua nem o mapa de resolução.
+export const GROUP_LOOK_INTEIRO = 'Look Inteiro';
+export const GROUP_PARTES_DE_CIMA = 'Partes de Cima';
+export const GROUP_PARTES_DE_BAIXO = 'Partes de Baixo';
+
+/** D-28: cota fixa por lado na mescla Partes de Cima/Baixo — nunca valor mágico inline. */
+export const GROUP_QUOTA_PER_SIDE = 4;
+
+/**
+ * Devolve o grupo cruzado que mescla com o grupo dado (D-28: Partes de Cima
+ * <-> Partes de Baixo). Look Inteiro é auto-contido (D-27) — devolve `null`,
+ * assim como qualquer valor desconhecido/nulo (nunca lança, nunca assume um
+ * par por padrão). Função interna (não exportada) — duplicada de
+ * `product-group.js` (Plano 03.1-01) por RULE-02.
+ * @param {string|*} group
+ * @returns {'Partes de Cima'|'Partes de Baixo'|null}
+ */
+function crossGroupOf(group) {
+  if (group === GROUP_PARTES_DE_CIMA) return GROUP_PARTES_DE_BAIXO;
+  if (group === GROUP_PARTES_DE_BAIXO) return GROUP_PARTES_DE_CIMA;
+  return null;
+}
+
 /**
  * Normaliza um valor de match (cor ou tecido canônico) para comparação
  * trim + minúsculas, mesma convenção de `findAttributeIndex` em
@@ -74,28 +120,73 @@ function normalizeMatchValue(value) {
 }
 
 /**
- * Verifica se `candidate` é elegível como recomendação para `source`: cor e
- * tecido canônico iguais após normalização, tecido canônico e cor não-nulos
- * (D-15, sem fallback por cor+estoque per D-16), grade de estoque disponível
- * (`hasAvailableGrade`), e productId diferente do da fonte (auto-exclusão).
+ * Verifica se `candidate` é elegível como recomendação para `source` DENTRO de
+ * um grupo-alvo específico (`targetGroup`). Regras, na ordem: candidato nulo,
+ * auto-exclusão (mesmo productId), grade de estoque indisponível, cor nula, e
+ * grupo do candidato diferente de `targetGroup` (D-26 a D-30 — isto sozinho já
+ * barra candidatos de grupo `null`/diferente, incluindo Look Inteiro contra
+ * outro grupo, D-27). Quando `requireFabric` é truthy (bloco mesmo-grupo,
+ * D-15): tecido não-nulo é obrigatório e precisa bater após normalização, além
+ * da cor. Quando `requireFabric` é falsy (bloco cruzado, D-28): tecido NUNCA é
+ * considerado — nem filtro nem exigência de não-nulo — só a cor precisa bater.
  * @param {CatalogProductEntry} source
  * @param {CatalogProductEntry} candidate
+ * @param {string|null} targetGroup
+ * @param {{ requireFabric: boolean }} options
  * @returns {boolean}
  */
-function isEligibleCandidate(source, candidate) {
+function isEligibleCandidateInGroup(source, candidate, targetGroup, { requireFabric }) {
   if (!candidate) return false;
   if (String(candidate.productId) === String(source.productId)) return false;
   if (!candidate.hasAvailableGrade) return false;
-  if (candidate.fabricTagCanonical == null) return false;
   if (candidate.colorValue == null) return false;
+  if (candidate.productGroupCanonical !== targetGroup) return false;
 
-  const sameColor =
-    normalizeMatchValue(candidate.colorValue) === normalizeMatchValue(source.colorValue);
-  const sameFabric =
-    normalizeMatchValue(candidate.fabricTagCanonical) ===
-    normalizeMatchValue(source.fabricTagCanonical);
+  if (requireFabric) {
+    if (candidate.fabricTagCanonical == null) return false;
+    const sameFabric =
+      normalizeMatchValue(candidate.fabricTagCanonical) ===
+      normalizeMatchValue(source.fabricTagCanonical);
+    if (!sameFabric) return false;
+  }
 
-  return sameColor && sameFabric;
+  return normalizeMatchValue(candidate.colorValue) === normalizeMatchValue(source.colorValue);
+}
+
+/**
+ * Monta e ordena (cascata D-13, `compareRecommendations`) o pool de
+ * candidatos elegíveis de um grupo-alvo específico dentro do `catalog`.
+ * Função interna, não exportada — não corta em `maxRecommendations`, quem
+ * chama decide o corte/composição de cota (`composeGroupQuota`).
+ * @param {CatalogProductEntry} source
+ * @param {CatalogProductEntry[]} catalog
+ * @param {string|null} targetGroup
+ * @param {{ requireFabric: boolean }} options
+ * @returns {Recommendation[]}
+ */
+function buildSortedPool(source, catalog, targetGroup, { requireFabric }) {
+  return catalog
+    .filter((candidate) => isEligibleCandidateInGroup(source, candidate, targetGroup, { requireFabric }))
+    .map(buildRecommendation)
+    .sort(compareRecommendations);
+}
+
+/**
+ * Compõe a cota fixa 4+4 (D-28) entre o pool mesmo-grupo (`samePoolSorted`) e
+ * o pool cruzado (`crossPoolSorted`). Caso base (Plano 03.1-02, Task 1): SEM
+ * backfill ainda — o backfill simétrico (D-29) é adicionado na Task 2 deste
+ * mesmo plano, estendendo esta função sem quebrar o caso base aqui escrito.
+ * @param {Recommendation[]} samePoolSorted
+ * @param {Recommendation[]} crossPoolSorted
+ * @param {{ quota?: number, cap?: number }} [options]
+ * @returns {Recommendation[]}
+ */
+function composeGroupQuota(
+  samePoolSorted,
+  crossPoolSorted,
+  { quota = GROUP_QUOTA_PER_SIDE, cap = MAX_RECOMMENDATIONS } = {}
+) {
+  return [...samePoolSorted.slice(0, quota), ...crossPoolSorted.slice(0, quota)].slice(0, cap);
 }
 
 /**
@@ -139,6 +230,7 @@ function buildRecommendation(candidate) {
     productId: candidate.productId,
     colorValue: candidate.colorValue,
     fabricTagCanonical: candidate.fabricTagCanonical,
+    productGroupCanonical: candidate.productGroupCanonical ?? null,
     stockTotal,
     sizesWithStock,
     centralSizesStock,
@@ -208,17 +300,25 @@ function compareRecommendations(a, b) {
 }
 
 /**
- * Motor de recomendação determinístico (RULE-01/RULE-02). Recebe um `productId`
- * e o array de produtos do snapshot (D-17, chamada produto a produto) e devolve
- * até `maxRecommendations` recomendações (D-18) elegíveis: mesma cor, mesmo
- * tecido canônico (D-15, sem fallback D-16), grade de estoque disponível — na
- * ordem da cascata D-13 (`compareRecommendations`). Entrada malformada,
- * produto-fonte ausente, ou produto-fonte sem tecido canônico/cor (D-15)
- * retornam `[]`, nunca lança (convenção T-02-06). Função pura: ordena uma cópia
- * do array de candidatos (nunca muta `catalogProducts` nem os objetos de
- * entrada), sem relógio/aleatoriedade/rede/importações. O corte em
- * `maxRecommendations` acontece APÓS a ordenação completa (RULE-01 seleciona os
- * melhores da cascata, não os primeiros da entrada).
+ * Motor de recomendação determinístico (RULE-01/RULE-02, D-26 a D-31, D-34,
+ * D-35). Recebe um `productId` e o array de produtos do snapshot (D-17,
+ * chamada produto a produto) e devolve até `maxRecommendations` recomendações
+ * (D-18) elegíveis. Look Inteiro (grupo auto-contido, D-27) exige mesma cor +
+ * mesmo tecido canônico (D-15, sem fallback D-16) + grade de estoque
+ * disponível + mesmo grupo, na ordem da cascata D-13 (`compareRecommendations`).
+ * Partes de Cima e Partes de Baixo mesclam entre si (D-28): até
+ * `GROUP_QUOTA_PER_SIDE` do mesmo grupo (critério completo cor+tecido+estoque)
+ * + até `GROUP_QUOTA_PER_SIDE` do grupo cruzado (cor+estoque, tecido nunca
+ * considerado), com backfill simétrico (D-29) quando um lado tem menos
+ * elegíveis que o outro. Entrada malformada, produto-fonte ausente, fonte sem
+ * cor, ou fonte com `productGroupCanonical` nulo/desconhecido (fail-closed,
+ * T-03.1-02) retornam `[]`, nunca lança (convenção T-02-06). Fonte sem tecido
+ * canônico ainda gera o bloco cruzado quando aplicável (D-34) — só o caminho
+ * Look Inteiro/auto-contido continua exigindo tecido sempre. Função pura:
+ * ordena cópias dos arrays de candidatos (nunca muta `catalogProducts` nem os
+ * objetos de entrada), sem relógio/aleatoriedade/rede/importações. O corte em
+ * `maxRecommendations` acontece APÓS a ordenação completa de cada bloco
+ * (RULE-01 seleciona os melhores da cascata, não os primeiros da entrada).
  * @param {string} productId
  * @param {CatalogProductEntry[]} catalogProducts
  * @param {{ maxRecommendations?: number }} [options]
@@ -234,11 +334,38 @@ export function recommendForProduct(
   const source = catalog.find((product) => product && String(product.productId) === targetId);
 
   if (!source) return [];
-  if (source.fabricTagCanonical == null || source.colorValue == null) return [];
+  if (source.colorValue == null) return [];
 
-  const recommendations = catalog
-    .filter((candidate) => isEligibleCandidate(source, candidate))
-    .map(buildRecommendation);
+  // Fail-closed (T-03.1-02): grupo-fonte nulo/desconhecido nunca é elegível
+  // por padrão. Sem esta guarda, dois produtos com `productGroupCanonical:
+  // null` (categoria não mapeada) que também coincidissem em cor+tecido+
+  // estoque se tornariam elegíveis um para o outro — fail-open incorreto.
+  const sourceGroup = source.productGroupCanonical;
+  if (sourceGroup == null) return [];
 
-  return [...recommendations].sort(compareRecommendations).slice(0, maxRecommendations);
+  const crossGroup = crossGroupOf(sourceGroup);
+
+  if (!crossGroup) {
+    // Look Inteiro (ou qualquer grupo não-mesclável): auto-contido (D-27),
+    // tecido continua sempre obrigatório para este caminho (D-15).
+    if (source.fabricTagCanonical == null) return [];
+    return buildSortedPool(source, catalog, sourceGroup, { requireFabric: true }).slice(
+      0,
+      maxRecommendations
+    );
+  }
+
+  // Partes de Cima/Baixo: mescla com cota 4+4 (D-28). Gate de tecido
+  // relaxado para o bloco mesmo-grupo (D-34) — fonte sem tecido ainda gera
+  // o bloco cruzado, que nunca exige tecido (requireFabric: false).
+  const samePool =
+    source.fabricTagCanonical != null
+      ? buildSortedPool(source, catalog, sourceGroup, { requireFabric: true })
+      : [];
+  const crossPool = buildSortedPool(source, catalog, crossGroup, { requireFabric: false });
+
+  return composeGroupQuota(samePool, crossPool, {
+    quota: GROUP_QUOTA_PER_SIDE,
+    cap: maxRecommendations,
+  });
 }
