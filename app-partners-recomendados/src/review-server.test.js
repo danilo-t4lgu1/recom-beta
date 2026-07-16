@@ -21,6 +21,22 @@
 // Test 7: POST /review/:productId (válido) → 405
 // Test 8: GET /review/:productId?removedIds={idDoCandidato} → candidato removido
 //   não aparece mais em "Depois"
+//
+// Cobre os 9 comportamentos novos do bloco <behavior> do plano 04-05:
+// Test 9: POST /review/999999999/write (sem decisão) → 409, corpo cita
+//   "aprovação registrada"
+// Test 10: mesma chamada do Test 9 com ?dryRun=false → AINDA 409
+// Test 11: POST /review/:productId/approve (sem removedIds) → 303 Location
+//   /review, decisão persistida com approvedRecommendationIds = ids calculados
+// Test 12: POST /review/:productId/approve com removedIds=<candidato> → decisão
+//   persistida NÃO contém o id removido
+// Test 13: POST /review/:productId/reject → status 'rejected',
+//   approvedRecommendationIds null
+// Test 14: POST /review/:productId/write após aprovação (com e sem
+//   ?dryRun=false) → 200, mesmo approvedIds/written
+// Test 15: POST /review/:productId/approve com corpo > 10.000 bytes → 413
+// Test 16: POST /review/:productId/approve com JSON malformado → 400
+// Test 17: GET nas 3 rotas de ação → 405
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -110,6 +126,71 @@ function seedNonEmptyDiffFixture(store, sourceName = 'Vestido Fonte') {
   return runId;
 }
 
+/**
+ * Fixture com 2 candidatos elegíveis para o mesmo produto-fonte (mesma cor/
+ * tecido/grupo, grade disponível) — necessária para provar D-19/D-20 (Test
+ * 12): remover UM candidato via `removedIds` não pode afetar o outro.
+ * @returns {number} runId
+ */
+function seedMultiCandidateFixture(store) {
+  const runId = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+  store.persistIngestionBatch({
+    runId,
+    records: {
+      products: [
+        { id: 'prod-source', name: 'Vestido Fonte', handle: 'vestido-fonte', canonicalUrl: 'https://x/vestido-fonte' },
+        { id: 'prod-candidate-1', name: 'Vestido Candidato 1', handle: 'vestido-candidato-1', canonicalUrl: 'https://x/vestido-candidato-1' },
+        { id: 'prod-candidate-2', name: 'Vestido Candidato 2', handle: 'vestido-candidato-2', canonicalUrl: 'https://x/vestido-candidato-2' },
+      ],
+      variants: [
+        { id: 'var-source', productId: 'prod-source', sku: 'SKU-S', colorValue: 'Preto', sizeValue: 'M', stockTotal: 5 },
+        { id: 'var-candidate-1', productId: 'prod-candidate-1', sku: 'SKU-C1', colorValue: 'Preto', sizeValue: 'M', stockTotal: 5 },
+        { id: 'var-candidate-2', productId: 'prod-candidate-2', sku: 'SKU-C2', colorValue: 'Preto', sizeValue: 'M', stockTotal: 5 },
+      ],
+      snapshots: [
+        {
+          productId: 'prod-source',
+          hasAvailableGrade: 1,
+          sizesInStockCount: 3,
+          fabricTagRaw: 'algodao',
+          fabricTagCanonical: 'Algodão',
+          colorValue: 'Preto',
+          categoryRaw: 'Vestidos',
+          productGroupCanonical: 'Look Inteiro',
+          snapshotAt: new Date().toISOString(),
+        },
+        {
+          productId: 'prod-candidate-1',
+          hasAvailableGrade: 1,
+          sizesInStockCount: 3,
+          fabricTagRaw: 'algodao',
+          fabricTagCanonical: 'Algodão',
+          colorValue: 'Preto',
+          categoryRaw: 'Vestidos',
+          productGroupCanonical: 'Look Inteiro',
+          snapshotAt: new Date().toISOString(),
+        },
+        {
+          productId: 'prod-candidate-2',
+          hasAvailableGrade: 1,
+          sizesInStockCount: 3,
+          fabricTagRaw: 'algodao',
+          fabricTagCanonical: 'Algodão',
+          colorValue: 'Preto',
+          categoryRaw: 'Vestidos',
+          productGroupCanonical: 'Look Inteiro',
+          snapshotAt: new Date().toISOString(),
+        },
+      ],
+      recommendationBaselines: [
+        { productId: 'prod-source', currentRecommendedProductId: null, readAt: new Date().toISOString() },
+      ],
+    },
+  });
+  store.finishIngestionRun({ runId, status: 'success', productsRead: 3 });
+  return runId;
+}
+
 describe('review-server.js', () => {
   it('Test 1: GET /review sem run de ingestão retorna 200 e o estado vazio exato do UI-SPEC', async () => {
     const res = await fetch(`${baseUrl}/review`);
@@ -184,5 +265,122 @@ describe('review-server.js', () => {
     const afterHeading = body.split('<div class="heading">Depois</div>')[1];
     const afterSection = afterHeading.split('<div class="actions-row">')[0];
     expect(afterSection).not.toContain('prod-candidate');
+  });
+
+  it('Test 9: POST /review/999999999/write sem nenhuma decisão registrada retorna 409 citando aprovação', async () => {
+    const res = await fetch(`${baseUrl}/review/999999999/write`, { method: 'POST' });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toContain('aprovação registrada');
+  });
+
+  it('Test 10: mesma chamada do Test 9 com ?dryRun=false AINDA retorna 409 (gate independe de dryRun)', async () => {
+    const res = await fetch(`${baseUrl}/review/999999999/write?dryRun=false`, { method: 'POST' });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toContain('aprovação registrada');
+  });
+
+  it('Test 11: POST /review/:productId/approve sem removedIds persiste approved com o conjunto calculado pelo motor', async () => {
+    const runId = seedNonEmptyDiffFixture(store);
+
+    const res = await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '',
+    });
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/review');
+
+    const decision = store.getApprovalDecision({ productId: 'prod-source', runId });
+    expect(decision.status).toBe('approved');
+    expect(decision.approvedRecommendationIds).toEqual(['prod-candidate']);
+  });
+
+  it('Test 12: POST /review/:productId/approve com removedIds exclui o candidato removido e mantém o restante', async () => {
+    const runId = seedMultiCandidateFixture(store);
+
+    const res = await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'removedIds=prod-candidate-1',
+    });
+
+    expect(res.status).toBe(303);
+
+    const decision = store.getApprovalDecision({ productId: 'prod-source', runId });
+    expect(decision.approvedRecommendationIds).not.toContain('prod-candidate-1');
+    expect(decision.approvedRecommendationIds).toContain('prod-candidate-2');
+  });
+
+  it('Test 13: POST /review/:productId/reject persiste status rejected com approvedRecommendationIds null', async () => {
+    const runId = seedNonEmptyDiffFixture(store);
+
+    const res = await fetch(`${baseUrl}/review/prod-source/reject`, { method: 'POST' });
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/review');
+
+    const decision = store.getApprovalDecision({ productId: 'prod-source', runId });
+    expect(decision.status).toBe('rejected');
+    expect(decision.approvedRecommendationIds).toBeNull();
+  });
+
+  it('Test 14: POST /review/:productId/write após aprovação retorna 200 com o mesmo approvedIds/written em dryRun true e false', async () => {
+    seedNonEmptyDiffFixture(store);
+    await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '',
+    });
+
+    const resDefault = await fetch(`${baseUrl}/review/prod-source/write`, { method: 'POST' });
+    const bodyDefault = await resDefault.json();
+
+    expect(resDefault.status).toBe(200);
+    expect(bodyDefault.approvedIds).toEqual(['prod-candidate']);
+    expect(bodyDefault.written).toBe(false);
+
+    const resExplicit = await fetch(`${baseUrl}/review/prod-source/write?dryRun=false`, { method: 'POST' });
+    const bodyExplicit = await resExplicit.json();
+
+    expect(resExplicit.status).toBe(200);
+    expect(bodyExplicit.approvedIds).toEqual(bodyDefault.approvedIds);
+    expect(bodyExplicit.written).toBe(false);
+  });
+
+  it('Test 15: POST /review/:productId/approve com corpo maior que o limite retorna 413 sem travar', async () => {
+    const hugeBody = 'removedIds=' + 'a'.repeat(20_000);
+
+    const res = await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: hugeBody,
+    });
+
+    expect(res.status).toBe(413);
+  });
+
+  it('Test 16: POST /review/:productId/approve com JSON malformado retorna 400', async () => {
+    const res = await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('Test 17: GET nas 3 rotas de ação (approve/reject/write) retorna 405', async () => {
+    const resApprove = await fetch(`${baseUrl}/review/prod-source/approve`, { method: 'GET' });
+    const resReject = await fetch(`${baseUrl}/review/prod-source/reject`, { method: 'GET' });
+    const resWrite = await fetch(`${baseUrl}/review/prod-source/write`, { method: 'GET' });
+
+    expect(resApprove.status).toBe(405);
+    expect(resReject.status).toBe(405);
+    expect(resWrite.status).toBe(405);
   });
 });
