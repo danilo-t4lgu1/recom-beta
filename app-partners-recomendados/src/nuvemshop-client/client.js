@@ -46,25 +46,32 @@ export async function getProduct(productId) {
 /**
  * Cria um Metafield no produto de teste, gravando o ID do produto recomendado.
  * namespace/key/owner_resource fixos conforme convenção deste spike (WRTE-01).
- * @param {{ ownerId: string|number, value: string }} params
+ * Aceita `limiter` opcional (Pitfall 3, Fase 5) — passa a usar `fetchWithRateLimit` em vez
+ * de `fetch` cru; chamadores existentes que não passam `limiter` continuam funcionando
+ * identicamente (fetchWithRateLimit cria uma instância descartável quando omitido).
+ * @param {{ ownerId: string|number, value: string, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
  * @returns {Promise<object>} Metafield criado, conforme retornado pela API
  */
-export async function createMetafield({ ownerId, value }) {
+export async function createMetafield({ ownerId, value, limiter }) {
   const { accessToken, storeId } = getAccessToken();
   const url = `${API_BASE}/${storeId}/metafields`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: buildHeaders(accessToken),
-    body: JSON.stringify({
-      namespace: 'recomendados',
-      key: 'produto_sugerido',
-      value,
-      owner_resource: 'Product',
-      owner_id: ownerId,
-      description: 'ID do produto recomendado - spike de viabilidade Fase 1',
-    }),
-  });
+  const response = await fetchWithRateLimit(
+    url,
+    {
+      method: 'POST',
+      headers: buildHeaders(accessToken),
+      body: JSON.stringify({
+        namespace: 'recomendados',
+        key: 'produto_sugerido',
+        value,
+        owner_resource: 'Product',
+        owner_id: ownerId,
+        description: 'ID do produto recomendado - spike de viabilidade Fase 1',
+      }),
+    },
+    limiter
+  );
 
   await assertOk(response, `POST ${url}`);
   return response.json();
@@ -92,6 +99,71 @@ export async function getMetafields({ ownerId, limiter }) {
 
   await assertOk(response, `GET ${url}`);
   return response.json();
+}
+
+/**
+ * Localiza o Metafield existente de um produto por namespace+key, reutilizando
+ * `getMetafields` (nenhuma chamada de rede nova) — nunca assume upsert automático via
+ * POST repetido (Pitfall 1 do 05-RESEARCH.md). Base para `updateMetafield` decidir PUT
+ * em vez de criar um Metafield duplicado.
+ * @param {{ ownerId: string|number, namespace?: string, key?: string, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
+ * @returns {Promise<object|null>} Metafield encontrado, ou `null` se nenhum bater namespace+key
+ */
+export async function findMetafield({
+  ownerId,
+  namespace = 'recomendados',
+  key = 'produto_sugerido',
+  limiter,
+}) {
+  const metafields = await getMetafields({ ownerId, limiter });
+  return metafields.find((m) => m.namespace === namespace && m.key === key) || null;
+}
+
+/**
+ * Atualiza o `value` de um Metafield existente via `PUT /metafields/{id}` — único
+ * caminho de "atualizar" um Metafield (nunca recriar via POST, Pitfall 1).
+ * @param {{ id: string|number, value: string, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
+ * @returns {Promise<object>} Metafield atualizado, conforme retornado pela API
+ */
+export async function updateMetafield({ id, value, limiter }) {
+  const { accessToken, storeId } = getAccessToken();
+  const url = `${API_BASE}/${storeId}/metafields/${encodeURIComponent(id)}`;
+
+  const response = await fetchWithRateLimit(
+    url,
+    {
+      method: 'PUT',
+      headers: buildHeaders(accessToken),
+      body: JSON.stringify({ value }),
+    },
+    limiter
+  );
+
+  await assertOk(response, `PUT ${url}`);
+  return response.json();
+}
+
+/**
+ * Remove um Metafield existente via `DELETE /metafields/{id}` — usado pelo rollback
+ * (Plano 05-04) quando o valor anterior capturado é `null` (nada a restaurar, só apagar).
+ * @param {{ id: string|number, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
+ * @returns {Promise<object>} corpo da resposta, ou `{}` quando não há corpo JSON parseável
+ */
+export async function deleteMetafield({ id, limiter }) {
+  const { accessToken, storeId } = getAccessToken();
+  const url = `${API_BASE}/${storeId}/metafields/${encodeURIComponent(id)}`;
+
+  const response = await fetchWithRateLimit(
+    url,
+    {
+      method: 'DELETE',
+      headers: buildHeaders(accessToken),
+    },
+    limiter
+  );
+
+  await assertOk(response, `DELETE ${url}`);
+  return response.json().catch(() => ({}));
 }
 
 /**
