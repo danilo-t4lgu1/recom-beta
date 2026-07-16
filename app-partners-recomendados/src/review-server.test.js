@@ -385,4 +385,17 @@ describe('review-server.js', () => {
     expect(resReject.status).toBe(405);
     expect(resWrite.status).toBe(405);
   });
+
+  it('Test 18 (CR-01 regression): POST /review/:productId/reject antes de qualquer run bem-sucedido nunca retorna 500', async () => {
+    // Banco temporário vazio, sem seed algum — mesma condição do Test 1, mas
+    // exercitando reject em vez de GET /review. getLatestSuccessfulRunId()
+    // retorna null aqui; approval_queue.run_id é NOT NULL no schema, então sem
+    // a guarda de CR-01 o upsert lançaria SqliteError e o catch-all do router
+    // devolveria 500.
+    const res = await fetch(`${baseUrl}/review/produto-qualquer/reject`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toContain('ingestão');
+  });
 });

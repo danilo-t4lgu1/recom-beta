@@ -497,7 +497,16 @@ export function createServer() {
         // necessário para rejeitar (rejeitar não precisa de removedIds).
         await readRawBody(req).catch(() => {});
 
+        // Deliberadamente NÃO valida productId contra o catálogo mais recente (design
+        // do 04-05-PLAN.md: rejeitar um produto que não está mais no snapshot mais
+        // recente ainda é uma operação válida). Mas approval_queue.run_id é NOT NULL
+        // (schema.sql) — sem isso, nenhuma execução de ingestão bem-sucedida ainda
+        // existe e o upsert lançaria SqliteError sem esta guarda (CR-01).
         const runId = getLatestSuccessfulRunId();
+        if (runId == null) {
+          sendJson(res, 409, { error: 'Nenhuma execução de ingestão bem-sucedida ainda — não é possível rejeitar.' });
+          return;
+        }
         upsertApprovalDecision({
           productId,
           runId,
