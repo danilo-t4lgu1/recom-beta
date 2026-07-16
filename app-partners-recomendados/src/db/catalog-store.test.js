@@ -362,3 +362,106 @@ describe('approval_queue e leitura de baseline (Fase 4, D-25)', () => {
     });
   });
 });
+
+describe('write_log (Fase 5, D-41/D-42)', () => {
+  it('insertWriteLog seguido de listWriteLog() retorna a linha inserida com todos os campos traduzidos (Test 13)', async () => {
+    const store = await import('./catalog-store.js');
+
+    store.insertWriteLog({
+      productId: 'prod-a',
+      runId: 1,
+      metafieldId: 'mf-1',
+      previousValue: 'prod-old',
+      writtenValue: 'prod-new',
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+
+    const rows = store.listWriteLog();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      productId: 'prod-a',
+      runId: 1,
+      metafieldId: 'mf-1',
+      previousValue: 'prod-old',
+      writtenValue: 'prod-new',
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+  });
+
+  it('getLastSuccessfulWriteLog nunca retorna uma linha failed mais recente no lugar de uma success mais antiga do mesmo produto (Test 14)', async () => {
+    const store = await import('./catalog-store.js');
+
+    store.insertWriteLog({
+      productId: 'prod-b',
+      runId: 1,
+      metafieldId: 'mf-1',
+      previousValue: 'x',
+      writtenValue: 'y',
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'prod-b',
+      runId: 1,
+      metafieldId: 'mf-1',
+      previousValue: 'y',
+      writtenValue: 'z',
+      triggeredBy: 'manual',
+      status: 'failed',
+      errorMessage: 'timeout',
+      writtenAt: '2026-07-16T11:00:00Z',
+    });
+
+    const last = store.getLastSuccessfulWriteLog({ productId: 'prod-b' });
+    expect(last.status).toBe('success');
+    expect(last.writtenValue).toBe('y');
+    expect(last.writtenAt).toBe('2026-07-16T10:00:00Z');
+  });
+
+  it('getLastSuccessfulWriteLog retorna undefined/null para produto sem nenhuma linha success, nunca lança (Test 15)', async () => {
+    const store = await import('./catalog-store.js');
+
+    expect(() => store.getLastSuccessfulWriteLog({ productId: 'prod-inexistente' })).not.toThrow();
+    expect(store.getLastSuccessfulWriteLog({ productId: 'prod-inexistente' })).toBeFalsy();
+  });
+
+  it('listWriteLog() retorna TODAS as linhas de produtos diferentes, ordenadas por written_at DESC (Test 16)', async () => {
+    const store = await import('./catalog-store.js');
+
+    store.insertWriteLog({
+      productId: 'prod-c',
+      runId: 1,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: 'v1',
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T09:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'prod-d',
+      runId: 1,
+      metafieldId: 'mf-2',
+      previousValue: null,
+      writtenValue: 'v2',
+      triggeredBy: 'scheduled',
+      status: 'failed',
+      errorMessage: 'boom',
+      writtenAt: '2026-07-16T12:00:00Z',
+    });
+
+    const rows = store.listWriteLog();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].productId).toBe('prod-d');
+    expect(rows[1].productId).toBe('prod-c');
+  });
+});
