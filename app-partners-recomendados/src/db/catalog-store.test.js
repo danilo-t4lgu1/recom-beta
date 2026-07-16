@@ -197,3 +197,168 @@ describe('catalog-store.js', () => {
     expect(legacyRow.fabricTagCanonical).toBe('Algodão');
   });
 });
+
+describe('approval_queue e leitura de baseline (Fase 4, D-25)', () => {
+  /**
+   * Cria um run 'success' real (startIngestionRun + persistIngestionBatch +
+   * finishIngestionRun) com 1 produto e 1 linha de recommendation_baseline,
+   * mesmo padrão do Test 3 já existente no arquivo — nunca mock.
+   * @param {object} store módulo catalog-store.js já importado dinamicamente
+   * @returns {number} runId gerado
+   */
+  function seedRunWithBaseline(store) {
+    const runId = store.startIngestionRun({ categoryId: '333', categoryName: 'Vestidos' });
+    store.persistIngestionBatch({
+      runId,
+      records: {
+        products: [
+          { id: 'prod-a', name: 'Vestido A', handle: 'vestido-a', canonicalUrl: 'https://x/vestido-a' },
+        ],
+        variants: [
+          { id: 'var-a', productId: 'prod-a', sku: 'SKUA', colorValue: 'Preto', sizeValue: 'M', stockTotal: 5 },
+        ],
+        snapshots: [
+          {
+            productId: 'prod-a',
+            hasAvailableGrade: 1,
+            sizesInStockCount: 3,
+            fabricTagRaw: 'algodao',
+            fabricTagCanonical: 'Algodão',
+            colorValue: 'Preto',
+            categoryRaw: 'Vestidos',
+            productGroupCanonical: 'Look Inteiro',
+            snapshotAt: new Date().toISOString(),
+          },
+        ],
+        recommendationBaselines: [
+          { productId: 'prod-a', currentRecommendedProductId: 'prod-old', readAt: new Date().toISOString() },
+        ],
+      },
+    });
+    store.finishIngestionRun({ runId, status: 'success', productsRead: 1 });
+    return runId;
+  }
+
+  it('getLatestSuccessfulRunId() retorna null num banco novo, sem nenhum run (Test 5)', async () => {
+    const store = await import('./catalog-store.js');
+
+    expect(store.getLatestSuccessfulRunId()).toBeNull();
+  });
+
+  it('após run success, getLatestSuccessfulRunId() retorna o runId correto e getBaselineForRun() retorna o Map esperado (Test 6)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+
+    expect(store.getLatestSuccessfulRunId()).toBe(runId);
+
+    const baseline = store.getBaselineForRun({ runId });
+    expect(baseline instanceof Map).toBe(true);
+    expect(baseline.get('prod-a')).toBe('prod-old');
+  });
+
+  it('getBaselineForRun() retorna Map vazio para runId null ou inexistente, nunca lança (Test 7)', async () => {
+    const store = await import('./catalog-store.js');
+
+    expect(() => store.getBaselineForRun({ runId: null })).not.toThrow();
+    expect(store.getBaselineForRun({ runId: null })).toEqual(new Map());
+
+    expect(() => store.getBaselineForRun({ runId: 999999 })).not.toThrow();
+    expect(store.getBaselineForRun({ runId: 999999 })).toEqual(new Map());
+  });
+
+  it('upsertApprovalDecision + getApprovalDecision fazem round-trip do conjunto EXATO de ids aprovados (Test 8, D-25)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+    store.upsertApprovalDecision({
+      productId: 'prod-a',
+      runId,
+      status: 'approved',
+      approvedRecommendationIds: ['1', '2', '3'],
+      decidedAt: new Date().toISOString(),
+    });
+
+    const decision = store.getApprovalDecision({ productId: 'prod-a', runId });
+    expect(decision.status).toBe('approved');
+    expect(decision.approvedRecommendationIds).toEqual(['1', '2', '3']);
+  });
+
+  it('upsertApprovalDecision com status rejected persiste approvedRecommendationIds null (Test 9)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+    store.upsertApprovalDecision({
+      productId: 'prod-a',
+      runId,
+      status: 'rejected',
+      approvedRecommendationIds: null,
+      decidedAt: new Date().toISOString(),
+    });
+
+    const decision = store.getApprovalDecision({ productId: 'prod-a', runId });
+    expect(decision).toEqual({ status: 'rejected', approvedRecommendationIds: null });
+  });
+
+  it('getApprovalDecision retorna null para (productId, runId) nunca decidido, nunca lança (Test 10)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+
+    expect(() => store.getApprovalDecision({ productId: 'prod-a', runId })).not.toThrow();
+    expect(store.getApprovalDecision({ productId: 'prod-a', runId })).toBeNull();
+  });
+
+  it('upsertApprovalDecision chamado duas vezes para o MESMO par sobrescreve a decisão (upsert, não append) (Test 11)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+    store.upsertApprovalDecision({
+      productId: 'prod-a',
+      runId,
+      status: 'approved',
+      approvedRecommendationIds: ['1', '2'],
+      decidedAt: new Date().toISOString(),
+    });
+    store.upsertApprovalDecision({
+      productId: 'prod-a',
+      runId,
+      status: 'rejected',
+      approvedRecommendationIds: null,
+      decidedAt: new Date().toISOString(),
+    });
+
+    const decision = store.getApprovalDecision({ productId: 'prod-a', runId });
+    expect(decision).toEqual({ status: 'rejected', approvedRecommendationIds: null });
+
+    const changes = store.listApprovalQueueChanges({ runId });
+    expect(changes).toHaveLength(1);
+    expect(changes[0].productId).toBe('prod-a');
+    expect(changes[0].status).toBe('rejected');
+  });
+
+  it('listApprovalQueueChanges retorna [] sem decisões e 1 entrada por produto decidido (Test 12)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = seedRunWithBaseline(store);
+
+    expect(store.listApprovalQueueChanges({ runId })).toEqual([]);
+
+    store.upsertApprovalDecision({
+      productId: 'prod-a',
+      runId,
+      status: 'approved',
+      approvedRecommendationIds: ['1'],
+      decidedAt: new Date().toISOString(),
+    });
+
+    const changes = store.listApprovalQueueChanges({ runId });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toEqual({
+      productId: 'prod-a',
+      status: 'approved',
+      approvedRecommendationIds: ['1'],
+      decidedAt: changes[0].decidedAt,
+    });
+  });
+});
