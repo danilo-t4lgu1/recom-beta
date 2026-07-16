@@ -364,12 +364,35 @@ describe('approval_queue e leitura de baseline (Fase 4, D-25)', () => {
 });
 
 describe('write_log (Fase 5, D-41/D-42)', () => {
+  /**
+   * Grava um produto real na tabela `products` (via persistIngestionBatch, mesmo
+   * caminho já usado por `seedRunWithBaseline`) — necessário porque
+   * `write_log.product_id` é `NOT NULL REFERENCES products(id)` e better-sqlite3
+   * habilita `PRAGMA foreign_keys = ON` por padrão: inserir em `write_log` para um
+   * `productId` que não existe em `products` lança `SqliteError: FOREIGN KEY
+   * constraint failed`.
+   * @param {object} store módulo catalog-store.js já importado dinamicamente
+   * @param {string} productId
+   * @returns {number} runId gerado
+   */
+  function seedProduct(store, productId) {
+    const runId = store.startIngestionRun({ categoryId: '444', categoryName: 'Vestidos' });
+    store.persistIngestionBatch({
+      runId,
+      records: {
+        products: [{ id: productId, name: 'Produto Teste', handle: productId, canonicalUrl: `https://x/${productId}` }],
+      },
+    });
+    return runId;
+  }
+
   it('insertWriteLog seguido de listWriteLog() retorna a linha inserida com todos os campos traduzidos (Test 13)', async () => {
     const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'prod-a');
 
     store.insertWriteLog({
       productId: 'prod-a',
-      runId: 1,
+      runId,
       metafieldId: 'mf-1',
       previousValue: 'prod-old',
       writtenValue: 'prod-new',
@@ -383,7 +406,7 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual({
       productId: 'prod-a',
-      runId: 1,
+      runId,
       metafieldId: 'mf-1',
       previousValue: 'prod-old',
       writtenValue: 'prod-new',
@@ -396,10 +419,11 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
 
   it('getLastSuccessfulWriteLog nunca retorna uma linha failed mais recente no lugar de uma success mais antiga do mesmo produto (Test 14)', async () => {
     const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'prod-b');
 
     store.insertWriteLog({
       productId: 'prod-b',
-      runId: 1,
+      runId,
       metafieldId: 'mf-1',
       previousValue: 'x',
       writtenValue: 'y',
@@ -410,7 +434,7 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
     });
     store.insertWriteLog({
       productId: 'prod-b',
-      runId: 1,
+      runId,
       metafieldId: 'mf-1',
       previousValue: 'y',
       writtenValue: 'z',
@@ -435,10 +459,12 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
 
   it('listWriteLog() retorna TODAS as linhas de produtos diferentes, ordenadas por written_at DESC (Test 16)', async () => {
     const store = await import('./catalog-store.js');
+    const runIdC = seedProduct(store, 'prod-c');
+    const runIdD = seedProduct(store, 'prod-d');
 
     store.insertWriteLog({
       productId: 'prod-c',
-      runId: 1,
+      runId: runIdC,
       metafieldId: 'mf-1',
       previousValue: null,
       writtenValue: 'v1',
@@ -449,7 +475,7 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
     });
     store.insertWriteLog({
       productId: 'prod-d',
-      runId: 1,
+      runId: runIdD,
       metafieldId: 'mf-2',
       previousValue: null,
       writtenValue: 'v2',

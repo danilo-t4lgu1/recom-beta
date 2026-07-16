@@ -150,6 +150,29 @@ const selectApprovalQueueForRunStmt = db.prepare(
    ORDER BY product_id`
 );
 
+// Fase 5 (D-41/D-42): write_log é simultaneamente snapshot (previous_value/
+// written_value, WRTE-02) e log de auditoria (triggered_by/status/error_message/
+// written_at, WRTE-04) — append-only, nunca upsert (mesma disciplina de
+// catalog_snapshots/insertSnapshot acima).
+const insertWriteLogStmt = db.prepare(
+  `INSERT INTO write_log
+     (product_id, run_id, metafield_id, previous_value, written_value,
+      triggered_by, status, error_message, written_at)
+   VALUES (@productId, @runId, @metafieldId, @previousValue, @writtenValue,
+      @triggeredBy, @status, @errorMessage, @writtenAt)`
+);
+
+const selectLastSuccessfulWriteLogStmt = db.prepare(
+  `SELECT * FROM write_log
+   WHERE product_id = @productId AND status = 'success'
+   ORDER BY written_at DESC
+   LIMIT 1`
+);
+
+const selectAllWriteLogStmt = db.prepare(
+  `SELECT * FROM write_log ORDER BY written_at DESC`
+);
+
 /**
  * Lê o snapshot completo do último run de ingestão com status 'success' e o
  * materializa no shape `CatalogProductEntry` consumido produto a produto por
@@ -316,6 +339,90 @@ export function listApprovalQueueChanges({ runId }) {
     approvedRecommendationIds: row.approved_recommendation_ids ? JSON.parse(row.approved_recommendation_ids) : null,
     decidedAt: row.decided_at,
   }));
+}
+
+/**
+ * Traduz uma linha crua (snake_case) de `write_log` para o shape camelCase
+ * consumido por `getLastSuccessfulWriteLog`/`listWriteLog` — mesmo padrão de
+ * tradução já usado por `getApprovalDecision`/`listApprovalQueueChanges`.
+ * @param {object} row linha crua retornada por `db.prepare(...).get()/.all()`
+ * @returns {{ productId: string, runId: number|null, metafieldId: string|null,
+ *   previousValue: string|null, writtenValue: string|null, triggeredBy: string,
+ *   status: string, errorMessage: string|null, writtenAt: string }}
+ */
+function mapWriteLogRow(row) {
+  return {
+    productId: row.product_id,
+    runId: row.run_id,
+    metafieldId: row.metafield_id,
+    previousValue: row.previous_value,
+    writtenValue: row.written_value,
+    triggeredBy: row.triggered_by,
+    status: row.status,
+    errorMessage: row.error_message,
+    writtenAt: row.written_at,
+  };
+}
+
+/**
+ * Insere exatamente 1 linha nova em `write_log` a cada chamada — nunca upsert/update
+ * (append-only, D-41). `write_log` serve simultaneamente de snapshot
+ * (`previousValue`/`writtenValue`, WRTE-02) e de log de auditoria (`triggeredBy`/
+ * `status`/`errorMessage`/`writtenAt`, WRTE-04) numa única linha por tentativa de
+ * escrita real de Metafield (sucesso ou falha) — consumida pelo Plano 05-03.
+ * @param {{ productId: string, runId: number|null, metafieldId: string|null,
+ *   previousValue: string|null, writtenValue: string|null,
+ *   triggeredBy: 'manual'|'scheduled'|'rollback', status: 'success'|'failed',
+ *   errorMessage: string|null, writtenAt: string }} params
+ * @returns {void}
+ */
+export function insertWriteLog({
+  productId,
+  runId,
+  metafieldId,
+  previousValue,
+  writtenValue,
+  triggeredBy,
+  status,
+  errorMessage,
+  writtenAt,
+}) {
+  insertWriteLogStmt.run({
+    productId: String(productId),
+    runId: runId ?? null,
+    metafieldId: metafieldId ?? null,
+    previousValue: previousValue ?? null,
+    writtenValue: writtenValue ?? null,
+    triggeredBy,
+    status,
+    errorMessage: errorMessage ?? null,
+    writtenAt,
+  });
+}
+
+/**
+ * Retorna a linha mais recente de `write_log` com `status = 'success'` para um
+ * produto — base do rollback (D-38, Plano 05-04). Uma linha `status = 'failed'`
+ * mais recente para o MESMO produto nunca é retornada no lugar de uma `success`
+ * mais antiga (filtro `status = 'success'` aplicado ANTES do `ORDER BY`/`LIMIT`).
+ * @param {{ productId: string }} params
+ * @returns {object|undefined} linha traduzida (camelCase) ou `undefined` se não
+ *   houver nenhuma linha `success` para o produto — nunca lança.
+ */
+export function getLastSuccessfulWriteLog({ productId }) {
+  const row = selectLastSuccessfulWriteLogStmt.get({ productId: String(productId) });
+  if (!row) return undefined;
+  return mapWriteLogRow(row);
+}
+
+/**
+ * Lista TODAS as linhas de `write_log` (de todos os produtos), ordenadas por
+ * `written_at DESC`, sem nenhum parâmetro de filtro (D-42) — base de `GET /audit`
+ * que o Plano 05-05 consome sem precisar de nenhuma lógica adicional de filtro.
+ * @returns {Array<object>} linhas traduzidas (camelCase)
+ */
+export function listWriteLog() {
+  return selectAllWriteLogStmt.all().map(mapWriteLogRow);
 }
 
 /**

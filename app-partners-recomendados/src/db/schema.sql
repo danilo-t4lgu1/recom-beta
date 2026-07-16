@@ -17,6 +17,12 @@
 -- approval_queue: registro de decisão de aprovação/rejeição por produto+run (D-25,
 --   Fase 4), conjunto exato de ids aprovados via JSON em texto, nunca um booleano;
 --   base do gate de escrita (APRV-03) que a Fase 5 consome.
+-- write_log: snapshot (previous_value/written_value, WRTE-02) e log de auditoria
+--   (triggered_by/status/error_message/written_at, WRTE-04) numa ÚNICA tabela/linha
+--   por tentativa de escrita real de Metafield na loja (D-41) — nunca duas tabelas
+--   separadas. Append-only: cada tentativa (sucesso ou falha) grava uma linha nova,
+--   nunca update/upsert (mesma disciplina de catalog_snapshots). Base do rollback
+--   (D-38, Plano 05-04) e da tela de auditoria (D-42, Plano 05-05).
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,3 +100,17 @@ CREATE TABLE IF NOT EXISTS approval_queue (
   created_at TEXT NOT NULL,
   UNIQUE(product_id, run_id)
 );
+
+CREATE TABLE IF NOT EXISTS write_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id TEXT NOT NULL REFERENCES products(id),
+  run_id INTEGER REFERENCES ingestion_runs(id),
+  metafield_id TEXT,
+  previous_value TEXT,
+  written_value TEXT,
+  triggered_by TEXT NOT NULL,   -- 'manual' | 'scheduled' | 'rollback'
+  status TEXT NOT NULL,         -- 'success' | 'failed'
+  error_message TEXT,
+  written_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_write_log_product ON write_log(product_id, written_at);
