@@ -22,6 +22,13 @@
 // Test 8: GET /review/:productId?removedIds={idDoCandidato} → candidato removido
 //   não aparece mais em "Depois"
 //
+// Cobre os 4 comportamentos novos do bloco <behavior> do plano 05-05 (GET /audit):
+// Test 20: GET /audit com write_log vazio → 200, "Nenhuma escrita real registrada ainda"
+// Test 21: GET /audit com N linhas (manual + rollback) → 200, uma linha de tabela
+//   por entrada, na mesma ordem retornada por listWriteLog()
+// Test 22: valor de write_log com <script>alert(1)</script> nunca aparece cru no HTML
+// Test 23: POST /audit → 405
+//
 // Cobre os 9 comportamentos novos do bloco <behavior> do plano 04-05:
 // Test 9: POST /review/999999999/write (sem decisão) → 409, corpo cita
 //   "aprovação registrada"
@@ -215,6 +222,24 @@ function seedMultiCandidateFixture(store) {
     },
   });
   store.finishIngestionRun({ runId, status: 'success', productsRead: 3 });
+  return runId;
+}
+
+/**
+ * Seed mínimo de 1 produto real (via ingestão, nunca SQL cru) — pré-requisito
+ * de `insertWriteLog` porque `write_log.product_id` referencia `products(id)`
+ * e better-sqlite3 habilita `PRAGMA foreign_keys=ON` por padrão.
+ * @returns {number} runId
+ */
+function seedProductForWriteLog(store, productId) {
+  const runId = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+  store.persistIngestionBatch({
+    runId,
+    records: {
+      products: [{ id: productId, name: 'Produto Teste', handle: productId, canonicalUrl: `https://x/${productId}` }],
+    },
+  });
+  store.finishIngestionRun({ runId, status: 'success', productsRead: 1 });
   return runId;
 }
 
@@ -444,5 +469,85 @@ describe('review-server.js', () => {
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toContain('ingestão');
+  });
+
+  it('Test 20: GET /audit com write_log vazio retorna 200 e o estado vazio', async () => {
+    const res = await fetch(`${baseUrl}/audit`);
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).toContain('Nenhuma escrita real registrada ainda');
+  });
+
+  it('Test 21: GET /audit com linhas manual e rollback lista uma linha de tabela por entrada, na ordem de listWriteLog()', async () => {
+    const runId = seedProductForWriteLog(store, 'prod-audit');
+
+    store.insertWriteLog({
+      productId: 'prod-audit',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: 'prod-old',
+      writtenValue: 'prod-new',
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'prod-audit',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: 'prod-new',
+      writtenValue: 'prod-old',
+      triggeredBy: 'rollback',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T11:00:00Z',
+    });
+
+    const res = await fetch(`${baseUrl}/audit`);
+    const body = await res.text();
+    const entries = store.listWriteLog();
+
+    expect(res.status).toBe(200);
+    expect(entries).toHaveLength(2);
+    expect(body).toContain('manual');
+    expect(body).toContain('rollback');
+
+    const manualIndex = body.indexOf('manual');
+    const rollbackIndex = body.indexOf('rollback');
+    // entries[0] é a mais recente segundo listWriteLog() (rollback, written_at
+    // mais tardio) — a ORDEM da resposta HTTP deve corresponder à ordem
+    // retornada pela função, não recalcular ordenação própria.
+    expect(entries[0].triggeredBy).toBe('rollback');
+    expect(rollbackIndex).toBeLessThan(manualIndex);
+  });
+
+  it('Test 22: valor de write_log com payload <script> nunca aparece cru no HTML de GET /audit (V5/XSS)', async () => {
+    const runId = seedProductForWriteLog(store, 'prod-audit-xss');
+
+    store.insertWriteLog({
+      productId: 'prod-audit-xss',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: 'prod-old',
+      writtenValue: '<script>alert(1)</script>',
+      triggeredBy: 'manual',
+      status: 'failed',
+      errorMessage: 'falha simulada',
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+
+    const res = await fetch(`${baseUrl}/audit`);
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).not.toContain('<script>alert(1)</script>');
+    expect(body).toContain('&lt;script&gt;');
+  });
+
+  it('Test 23: POST /audit retorna 405', async () => {
+    const res = await fetch(`${baseUrl}/audit`, { method: 'POST' });
+    expect(res.status).toBe(405);
   });
 });

@@ -20,6 +20,7 @@ import {
   getBaselineForRun,
   getApprovalDecision,
   upsertApprovalDecision,
+  listWriteLog,
 } from './db/catalog-store.js';
 import { buildReviewQueue } from './review/review-queue.js';
 import { computeDiff } from './review/diff.js';
@@ -40,6 +41,7 @@ const PRODUCT_REVIEW_PATH = /^\/review\/([^/]+)\/?$/;
 const APPROVE_PATH = /^\/review\/([^/]+)\/approve\/?$/;
 const REJECT_PATH = /^\/review\/([^/]+)\/reject\/?$/;
 const WRITE_PATH = /^\/review\/([^/]+)\/write\/?$/;
+const AUDIT_PATH = /^\/audit\/?$/;
 
 // Teto explícito antes de acumular o corpo da requisição em memória (T-04-07,
 // Pitfall 6 do RESEARCH) — nunca esperar `req.on('end')` para descobrir que o
@@ -327,6 +329,50 @@ function renderQueuePage(queueEntries) {
 }
 
 /**
+ * Renderiza a tela somente-leitura de auditoria (D-41/D-42): lista cronológica
+ * SEM filtro de TODAS as escritas reais (`triggered_by: 'manual'`) e rollbacks
+ * (`triggered_by: 'rollback'`, D-44) registrados em `write_log`, na mesma
+ * ordem retornada por `listWriteLog()` (written_at DESC é responsabilidade
+ * exclusiva de `catalog-store.js`, Plano 05-02). Todo valor dinâmico passa por
+ * `escapeHtml` antes de interpolar (T-05-13).
+ * @param {Array<{ productId: string, writtenAt: string, previousValue: string|null,
+ *   writtenValue: string|null, triggeredBy: string, status: string }>} entries
+ * @returns {string}
+ */
+function renderAuditPage(entries) {
+  if (!entries || entries.length === 0) {
+    return renderPage(
+      'Auditoria de Escritas',
+      `<div class="empty-state">
+        <div class="display">Nenhuma escrita real registrada ainda</div>
+      </div>`
+    );
+  }
+
+  const rows = entries
+    .map(
+      (entry) => `<tr>
+        <td>${escapeHtml(entry.productId)}</td>
+        <td>${escapeHtml(entry.writtenAt)}</td>
+        <td>${escapeHtml(entry.previousValue)}</td>
+        <td>${escapeHtml(entry.writtenValue)}</td>
+        <td>${escapeHtml(entry.triggeredBy)}</td>
+        <td>${escapeHtml(entry.status)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return renderPage(
+    'Auditoria de Escritas',
+    `<div class="display">Auditoria de Escritas</div>
+    <table class="queue-table">
+      <thead><tr><th>Produto</th><th>Quando</th><th>Antes</th><th>Depois</th><th>Gatilho</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`
+  );
+}
+
+/**
  * Corpo simples para a resposta 404 de um productId inexistente no catálogo.
  * @param {string} productId
  * @returns {string}
@@ -549,6 +595,17 @@ export function createServer() {
           }
           sendJson(res, 500, { error: 'Internal error' });
         }
+        return;
+      }
+
+      if (AUDIT_PATH.test(url.pathname)) {
+        if (req.method !== 'GET') {
+          sendHtml(res, 405, renderPage('Método não permitido', '<div>Método não permitido.</div>'));
+          return;
+        }
+
+        const entries = listWriteLog();
+        sendHtml(res, 200, renderAuditPage(entries));
         return;
       }
 
