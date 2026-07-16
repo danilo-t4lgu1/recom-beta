@@ -290,6 +290,7 @@ describe('review-server.js', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: '',
+      redirect: 'manual',
     });
 
     expect(res.status).toBe(303);
@@ -307,6 +308,7 @@ describe('review-server.js', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'removedIds=prod-candidate-1',
+      redirect: 'manual',
     });
 
     expect(res.status).toBe(303);
@@ -319,7 +321,7 @@ describe('review-server.js', () => {
   it('Test 13: POST /review/:productId/reject persiste status rejected com approvedRecommendationIds null', async () => {
     const runId = seedNonEmptyDiffFixture(store);
 
-    const res = await fetch(`${baseUrl}/review/prod-source/reject`, { method: 'POST' });
+    const res = await fetch(`${baseUrl}/review/prod-source/reject`, { method: 'POST', redirect: 'manual' });
 
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe('/review');

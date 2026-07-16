@@ -18,9 +18,13 @@ import {
   getLatestSnapshotProducts,
   getLatestSuccessfulRunId,
   getBaselineForRun,
+  getApprovalDecision,
+  upsertApprovalDecision,
 } from './db/catalog-store.js';
 import { buildReviewQueue } from './review/review-queue.js';
 import { computeDiff } from './review/diff.js';
+import { assertApproved, ApprovalRequiredError } from './review/approval-gate.js';
+import { executeApprovedWrite } from './review/write-executor.js';
 
 // REVIEW_PORT: porta própria, NUNCA a porta 3000 padrão de server.js (PLAT-05).
 const PORT = process.env.REVIEW_PORT || 3100;
@@ -33,6 +37,20 @@ const DRY_RUN_MODE = process.env.DRY_RUN !== 'false';
 
 const QUEUE_PATH = /^\/review\/?$/;
 const PRODUCT_REVIEW_PATH = /^\/review\/([^/]+)\/?$/;
+const APPROVE_PATH = /^\/review\/([^/]+)\/approve\/?$/;
+const REJECT_PATH = /^\/review\/([^/]+)\/reject\/?$/;
+const WRITE_PATH = /^\/review\/([^/]+)\/write\/?$/;
+
+// Teto explícito antes de acumular o corpo da requisição em memória (T-04-07,
+// Pitfall 6 do RESEARCH) — nunca esperar `req.on('end')` para descobrir que o
+// corpo era grande demais.
+const MAX_BODY_BYTES = 10_000;
+
+/**
+ * Erro interno (nunca exportado) — só serve para distinguir o caso 413 dentro
+ * deste arquivo, do mesmo jeito que `ApprovalRequiredError` distingue 409.
+ */
+class BodyTooLargeError extends Error {}
 
 const HTML_ESCAPE_MAP = {
   '&': '&amp;',
@@ -68,6 +86,101 @@ function sendHtml(res, statusCode, html) {
     'Content-Length': Buffer.byteLength(html),
   });
   res.end(html);
+}
+
+/**
+ * Resposta JSON com `Content-Type`/`Content-Length` corretos — mesmo padrão
+ * de `server.js` (rota pública PLAT-05), usado pela rota `/write` (endpoint
+ * machine-facing desta fase).
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} statusCode
+ * @param {object} payload
+ */
+function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+/**
+ * Acumula o corpo bruto da requisição com um teto explícito de bytes (T-04-07,
+ * Pitfall 6 do RESEARCH) — ao exceder `MAX_BODY_BYTES`, rejeita IMEDIATAMENTE
+ * com `BodyTooLargeError` e chama `req.destroy()`, nunca continuando a
+ * acumular o restante do corpo em memória.
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {Promise<string>}
+ */
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let bytes = 0;
+    let tooLarge = false;
+    const chunks = [];
+
+    req.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        // Nunca continuar acumulando (Pitfall 6/T-04-07): a partir daqui o
+        // chunk é descartado, não empilhado em `chunks`, então o corpo real
+        // nunca cresce em memória além de ~MAX_BODY_BYTES mesmo que o
+        // cliente continue enviando dados. Deliberadamente NÃO chamamos
+        // `req.destroy()` aqui — isso derrubaria o socket compartilhado
+        // pela resposta antes do 413 poder ser escrito (Rule 1: o
+        // `req.destroy()` sugerido verbatim no RESEARCH mataria a conexão
+        // antes de qualquer `res.write`); a rejeição real acontece em
+        // `req.on('end', ...)`, depois que a conexão drenou naturalmente.
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (tooLarge) {
+        reject(new BodyTooLargeError('Corpo da requisição excede o limite permitido'));
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString('utf-8'));
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Extrai `removedIds` do corpo de `POST /review/:productId/approve` — o
+ * ÚNICO campo aceito do corpo desta rota. Nunca existe um caminho de código
+ * que leia um campo "approvedIds"/"ids aprovados" direto do cliente (ver
+ * `<objective>` do Plano 04-05 para a justificativa de segurança/D-19/D-20):
+ * o conjunto final aprovado é SEMPRE recomputado no servidor via
+ * `computeDiff`, nunca aceito literalmente do corpo da requisição.
+ * @param {string} rawBody
+ * @param {string|undefined} contentType
+ * @returns {string[]}
+ */
+function parseRemovedIds(rawBody, contentType) {
+  let raw;
+
+  if (contentType && contentType.includes('application/json')) {
+    const parsed = rawBody ? JSON.parse(rawBody) : {};
+    raw = parsed.removedIds;
+  } else {
+    const params = new URLSearchParams(rawBody);
+    raw = params.get('removedIds');
+  }
+
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === 'string') {
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 // Tokens visuais LITERAIS do 04-UI-SPEC.md — cores, tipografia, espaçamento.
@@ -314,6 +427,121 @@ export function createServer() {
   return createHttpServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+      const approveMatch = url.pathname.match(APPROVE_PATH);
+      if (approveMatch) {
+        if (req.method !== 'POST') {
+          sendHtml(res, 405, renderPage('Método não permitido', '<div>Método não permitido.</div>'));
+          return;
+        }
+
+        const productId = decodeURIComponent(approveMatch[1]);
+
+        let rawBody;
+        try {
+          rawBody = await readRawBody(req);
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) {
+            sendJson(res, 413, { error: 'Corpo da requisição excede o limite permitido' });
+            return;
+          }
+          throw err;
+        }
+
+        let removedIds;
+        try {
+          removedIds = parseRemovedIds(rawBody, req.headers['content-type']);
+        } catch (err) {
+          sendJson(res, 400, { error: 'Corpo da requisição inválido' });
+          return;
+        }
+
+        const catalogProducts = getLatestSnapshotProducts();
+        const product = catalogProducts.find((p) => String(p.productId) === productId);
+
+        if (!product) {
+          sendHtml(res, 404, renderProductNotFoundPage(productId));
+          return;
+        }
+
+        const runId = getLatestSuccessfulRunId();
+        const baselineMap = getBaselineForRun({ runId });
+        const baselineValue = baselineMap.has(productId) ? baselineMap.get(productId) : null;
+        const beforeIds = baselineValue != null ? [String(baselineValue)] : [];
+
+        const diff = computeDiff(productId, catalogProducts, beforeIds, { removedIds });
+
+        upsertApprovalDecision({
+          productId,
+          runId,
+          status: 'approved',
+          approvedRecommendationIds: diff.afterIds,
+          decidedAt: new Date().toISOString(),
+        });
+
+        res.writeHead(303, { Location: '/review' });
+        res.end();
+        return;
+      }
+
+      const rejectMatch = url.pathname.match(REJECT_PATH);
+      if (rejectMatch) {
+        if (req.method !== 'POST') {
+          sendHtml(res, 405, renderPage('Método não permitido', '<div>Método não permitido.</div>'));
+          return;
+        }
+
+        const productId = decodeURIComponent(rejectMatch[1]);
+
+        // Drena a conexão e ignora o conteúdo/erro — nada do corpo é
+        // necessário para rejeitar (rejeitar não precisa de removedIds).
+        await readRawBody(req).catch(() => {});
+
+        const runId = getLatestSuccessfulRunId();
+        upsertApprovalDecision({
+          productId,
+          runId,
+          status: 'rejected',
+          approvedRecommendationIds: null,
+          decidedAt: new Date().toISOString(),
+        });
+
+        res.writeHead(303, { Location: '/review' });
+        res.end();
+        return;
+      }
+
+      const writeMatch = url.pathname.match(WRITE_PATH);
+      if (writeMatch) {
+        if (req.method !== 'POST') {
+          sendHtml(res, 405, renderPage('Método não permitido', '<div>Método não permitido.</div>'));
+          return;
+        }
+
+        const productId = decodeURIComponent(writeMatch[1]);
+
+        // Drena a conexão e ignora o conteúdo/erro — a rota /write não lê
+        // nada do corpo, só da query string (?dryRun=).
+        await readRawBody(req).catch(() => {});
+
+        const dryRunParam = url.searchParams.get('dryRun');
+        const dryRun = dryRunParam != null ? dryRunParam !== 'false' : DRY_RUN_MODE;
+
+        const runId = getLatestSuccessfulRunId();
+        const decision = runId != null ? getApprovalDecision({ productId, runId }) : null;
+
+        try {
+          const result = executeApprovedWrite({ productId, decision, dryRun });
+          sendJson(res, 200, result);
+        } catch (err) {
+          if (err instanceof ApprovalRequiredError) {
+            sendJson(res, 409, { error: err.message });
+            return;
+          }
+          sendJson(res, 500, { error: 'Internal error' });
+        }
+        return;
+      }
 
       if (QUEUE_PATH.test(url.pathname)) {
         if (req.method !== 'GET') {
