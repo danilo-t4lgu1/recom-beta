@@ -540,7 +540,7 @@ export function createServer() {
         const decision = runId != null ? getApprovalDecision({ productId, runId }) : null;
 
         try {
-          const result = executeApprovedWrite({ productId, decision, dryRun });
+          const result = await executeApprovedWrite({ productId, decision, dryRun, runId });
           sendJson(res, 200, result);
         } catch (err) {
           if (err instanceof ApprovalRequiredError) {

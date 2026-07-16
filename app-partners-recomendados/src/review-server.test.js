@@ -42,6 +42,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { findMetafield, updateMetafield, createMetafield } from './nuvemshop-client/client.js';
+import { notifyWriteFailure } from './review/notify-failure.js';
+
+// Mocka o módulo INTEIRO de client.js (não só as 3 funções de escrita novas) —
+// evita quebrar qualquer import futuro de outra função do módulo carregada no
+// mesmo teste. Nenhum teste deste arquivo faz uma chamada de rede real à
+// Nuvemshop (T-05-06).
+vi.mock('./nuvemshop-client/client.js', () => ({
+  findMetafield: vi.fn(),
+  updateMetafield: vi.fn(),
+  createMetafield: vi.fn(),
+  deleteMetafield: vi.fn(),
+  getMetafields: vi.fn(),
+  listCategories: vi.fn(),
+  listProducts: vi.fn(),
+  getProduct: vi.fn(),
+}));
+
+vi.mock('./review/notify-failure.js', () => ({
+  notifyWriteFailure: vi.fn(),
+}));
 
 let tempDir;
 let store;
@@ -53,6 +74,12 @@ beforeEach(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'review-server-test-'));
   process.env.CATALOG_DB_DIR = tempDir;
   vi.resetModules();
+  vi.clearAllMocks();
+  // Default seguro: nenhum teste depende do resultado de notifyWriteFailure,
+  // só de ela ter sido chamada — sem isso o `.catch(() => {})` do call site em
+  // write-executor.js quebraria (vi.fn() sem implementação retorna
+  // `undefined`, não uma Promise).
+  vi.mocked(notifyWriteFailure).mockResolvedValue({ notified: false });
 
   store = await import('./db/catalog-store.js');
   reviewServer = await import('./review-server.js');
@@ -331,7 +358,7 @@ describe('review-server.js', () => {
     expect(decision.approvedRecommendationIds).toBeNull();
   });
 
-  it('Test 14: POST /review/:productId/write após aprovação retorna 200 com o mesmo approvedIds/written em dryRun true e false', async () => {
+  it('Test 14: POST /review/:productId/write após aprovação com dryRun=false executa a escrita real e retorna written:true', async () => {
     seedNonEmptyDiffFixture(store);
     await fetch(`${baseUrl}/review/prod-source/approve`, {
       method: 'POST',
@@ -346,12 +373,32 @@ describe('review-server.js', () => {
     expect(bodyDefault.approvedIds).toEqual(['prod-candidate']);
     expect(bodyDefault.written).toBe(false);
 
+    vi.mocked(findMetafield).mockResolvedValue(null);
+    vi.mocked(createMetafield).mockResolvedValue({ id: 'mf-test' });
+
     const resExplicit = await fetch(`${baseUrl}/review/prod-source/write?dryRun=false`, { method: 'POST' });
     const bodyExplicit = await resExplicit.json();
 
     expect(resExplicit.status).toBe(200);
     expect(bodyExplicit.approvedIds).toEqual(bodyDefault.approvedIds);
-    expect(bodyExplicit.written).toBe(false);
+    expect(bodyExplicit.written).toBe(true);
+  });
+
+  it('Test 19: falha real durante POST /write (dryRun=false, aprovação válida) retorna 500 e notifica a falha', async () => {
+    seedNonEmptyDiffFixture(store);
+    await fetch(`${baseUrl}/review/prod-source/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '',
+    });
+
+    vi.mocked(findMetafield).mockResolvedValue(null);
+    vi.mocked(createMetafield).mockRejectedValue(new Error('falha simulada'));
+
+    const res = await fetch(`${baseUrl}/review/prod-source/write?dryRun=false`, { method: 'POST' });
+
+    expect(res.status).toBe(500);
+    expect(notifyWriteFailure).toHaveBeenCalledTimes(1);
   });
 
   it('Test 15: POST /review/:productId/approve com corpo maior que o limite retorna 413 sem travar', async () => {
