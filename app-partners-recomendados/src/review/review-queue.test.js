@@ -66,23 +66,32 @@ describe('hasChanged - D-23 comparação por conjunto, ignora ordem', () => {
 
 describe('buildReviewQueue - D-22 só produtos com diff real entram na fila', () => {
   it('retorna apenas os produtos com diff (B e C), com shape correto (Test 6)', () => {
+    // Cada par fonte/candidato usa uma cor exclusiva para que só se enxerguem
+    // mutuamente (evita que produtos de pares diferentes se recomendem entre
+    // si e poluam a asserção). Baseline dos CANDIDATOS é sempre definido para
+    // bater exatamente com seu próprio cálculo (nenhum diff neles), assim o
+    // teste fica focado só no diff de A/B/C.
+
     // Produto A: baseline igual ao cálculo do motor (Look Inteiro auto-contido) - sem mudança.
-    const productA = makeProduct({ productId: 'A', name: 'Produto A' });
-    const aCandidate = makeProduct({ productId: 'A-cand' });
+    const productA = makeProduct({ productId: 'A', name: 'Produto A', colorValue: 'ColorA' });
+    const aCandidate = makeProduct({ productId: 'A-cand', colorValue: 'ColorA' });
 
     // Produto B: baseline diferente do cálculo do motor.
-    const productB = makeProduct({ productId: 'B', name: 'Produto B' });
-    const bCandidate = makeProduct({ productId: 'B-cand' });
+    const productB = makeProduct({ productId: 'B', name: 'Produto B', colorValue: 'ColorB' });
+    const bCandidate = makeProduct({ productId: 'B-cand', colorValue: 'ColorB' });
 
     // Produto C: baseline vazio, motor retorna itens.
-    const productC = makeProduct({ productId: 'C', name: 'Produto C' });
-    const cCandidate = makeProduct({ productId: 'C-cand' });
+    const productC = makeProduct({ productId: 'C', name: 'Produto C', colorValue: 'ColorC' });
+    const cCandidate = makeProduct({ productId: 'C-cand', colorValue: 'ColorC' });
 
     const catalogProducts = [productA, aCandidate, productB, bCandidate, productC, cCandidate];
 
     const baselineMap = new Map([
       ['A', 'A-cand'],
+      ['A-cand', 'A'],
       ['B', 'some-other-id-not-in-result'],
+      ['B-cand', 'B'],
+      ['C-cand', 'C'],
       // C ausente do baselineMap => beforeIds: []
     ]);
 
