@@ -14,6 +14,9 @@
 --   Grupo de Produtos (D-26/D-33, Fase 03.1) — bancos já existentes (sem essas
 --   colunas) recebem migração idempotente em catalog-store.js (Pitfall 2 do
 --   03.1-RESEARCH.md), não apenas este CREATE TABLE.
+-- approval_queue: registro de decisão de aprovação/rejeição por produto+run (D-25,
+--   Fase 4), conjunto exato de ids aprovados via JSON em texto, nunca um booleano;
+--   base do gate de escrita (APRV-03) que a Fase 5 consome.
 
 CREATE TABLE IF NOT EXISTS ingestion_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,4 +82,15 @@ CREATE TABLE IF NOT EXISTS recommendation_baseline (
   current_recommended_product_id TEXT,
   read_at TEXT NOT NULL,
   PRIMARY KEY (product_id, run_id)
+);
+
+CREATE TABLE IF NOT EXISTS approval_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id TEXT NOT NULL REFERENCES products(id),
+  run_id INTEGER NOT NULL REFERENCES ingestion_runs(id),
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  approved_recommendation_ids TEXT,       -- JSON array de productId, NULL se rejected/pending
+  decided_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(product_id, run_id)
 );

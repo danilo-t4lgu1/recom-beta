@@ -116,6 +116,40 @@ const selectVariantsForRun = db.prepare(
    ORDER BY product_id, id`
 );
 
+// Fase 4 (D-25, APRV-02/APRV-03): leitura de baseline por run + persistência/leitura
+// da decisão de aprovação em approval_queue.
+const selectBaselineForRunStmt = db.prepare(
+  `SELECT product_id, current_recommended_product_id
+   FROM recommendation_baseline
+   WHERE run_id = @runId`
+);
+
+// created_at fica DE FORA do SET do DO UPDATE propositalmente — preserva o valor
+// do primeiro INSERT em decisões subsequentes para o mesmo (product_id, run_id)
+// (upsert, não append).
+const upsertApprovalDecisionStmt = db.prepare(
+  `INSERT INTO approval_queue
+     (product_id, run_id, status, approved_recommendation_ids, decided_at, created_at)
+   VALUES (@productId, @runId, @status, @approvedRecommendationIds, @decidedAt, @createdAt)
+   ON CONFLICT(product_id, run_id) DO UPDATE SET
+     status=excluded.status,
+     approved_recommendation_ids=excluded.approved_recommendation_ids,
+     decided_at=excluded.decided_at`
+);
+
+const selectApprovalDecisionStmt = db.prepare(
+  `SELECT status, approved_recommendation_ids
+   FROM approval_queue
+   WHERE product_id = @productId AND run_id = @runId`
+);
+
+const selectApprovalQueueForRunStmt = db.prepare(
+  `SELECT product_id, status, approved_recommendation_ids, decided_at
+   FROM approval_queue
+   WHERE run_id = @runId
+   ORDER BY product_id`
+);
+
 /**
  * Lê o snapshot completo do último run de ingestão com status 'success' e o
  * materializa no shape `CatalogProductEntry` consumido produto a produto por
@@ -202,6 +236,86 @@ export function getLatestSnapshotProducts() {
       variants: variantsByProduct.get(productId) || [],
     };
   });
+}
+
+/**
+ * Resolve o run_id do último snapshot bem-sucedido, sem duplicar a lógica interna já
+ * usada por `getLatestSnapshotProducts` (D-25/APRV-02, Fase 4). Base para localizar
+ * o run "atual" contra o qual toda decisão de aprovação (`upsertApprovalDecision`) e
+ * leitura de baseline (`getBaselineForRun`) deve operar.
+ * @returns {number|null} `null` se nenhum run com status 'success' existir ainda.
+ */
+export function getLatestSuccessfulRunId() {
+  const latestRun = selectLatestSuccessfulRun.get();
+  return latestRun ? latestRun.id : null;
+}
+
+/**
+ * Lê o "antes" do diff de aprovação (D-25): o `current_recommended_product_id`
+ * gravado em `recommendation_baseline` para um run específico. Primeira função de
+ * leitura desta tabela (só existia escrita até a Fase 4) — `recommendation_baseline`
+ * é escrita desde a Fase 2 (DATA-02), sem lógica de drift (D-12).
+ * @param {{ runId: number|null }} params
+ * @returns {Map<string, string|null>} chave = productId (string, mesma convenção de
+ *   `getLatestSnapshotProducts`), valor = current_recommended_product_id (string ou
+ *   null). `runId` nulo ou sem nenhuma linha retorna `Map` vazio, nunca lança.
+ */
+export function getBaselineForRun({ runId }) {
+  if (runId == null) return new Map();
+  const rows = selectBaselineForRunStmt.all({ runId });
+  return new Map(rows.map((row) => [String(row.product_id), row.current_recommended_product_id]));
+}
+
+/**
+ * Persiste a decisão de aprovação/rejeição de um produto para um run (D-25,
+ * APRV-02/APRV-03): SEMPRE o conjunto EXATO de ids aprovados, nunca um booleano.
+ * Upsert por (productId, runId) — chamada repetida SOBRESCREVE status/
+ * approvedRecommendationIds/decidedAt da decisão anterior, mas preserva o
+ * `created_at` do primeiro registro (upsert, não append; ver `upsertApprovalDecisionStmt`).
+ * @param {{ productId: string, runId: number, status: 'approved'|'rejected',
+ *   approvedRecommendationIds: string[]|null, decidedAt: string }} params
+ * @returns {void}
+ */
+export function upsertApprovalDecision({ productId, runId, status, approvedRecommendationIds, decidedAt }) {
+  upsertApprovalDecisionStmt.run({
+    productId: String(productId),
+    runId,
+    status,
+    approvedRecommendationIds: approvedRecommendationIds != null ? JSON.stringify(approvedRecommendationIds) : null,
+    decidedAt,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Lê a decisão de aprovação já registrada para um produto+run (base do gate
+ * `assertApproved`, Plano 04-03). "Sem decisão" é um estado válido, não um erro.
+ * @param {{ productId: string, runId: number }} params
+ * @returns {{ status: 'approved'|'rejected', approvedRecommendationIds: string[]|null }|null}
+ *   `null` se não houver nenhuma linha para (productId, runId), nunca lança.
+ */
+export function getApprovalDecision({ productId, runId }) {
+  const row = selectApprovalDecisionStmt.get({ productId: String(productId), runId });
+  if (!row) return null;
+  return {
+    status: row.status,
+    approvedRecommendationIds: row.approved_recommendation_ids ? JSON.parse(row.approved_recommendation_ids) : null,
+  };
+}
+
+/**
+ * Lista todas as decisões de aprovação já tomadas para um run, ordenadas por
+ * product_id — interface que a Fase 5 consome para saber o que escrever na loja.
+ * @param {{ runId: number }} params
+ * @returns {Array<{ productId: string, status: string, approvedRecommendationIds: string[]|null, decidedAt: string|null }>}
+ */
+export function listApprovalQueueChanges({ runId }) {
+  return selectApprovalQueueForRunStmt.all({ runId }).map((row) => ({
+    productId: row.product_id,
+    status: row.status,
+    approvedRecommendationIds: row.approved_recommendation_ids ? JSON.parse(row.approved_recommendation_ids) : null,
+    decidedAt: row.decided_at,
+  }));
 }
 
 /**
