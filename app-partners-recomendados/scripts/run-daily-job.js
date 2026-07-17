@@ -34,6 +34,7 @@ import {
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
 import { notifyWriteFailure } from '../src/review/notify-failure.js';
+import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
 
 /**
  * Orquestra uma execução do job diário: guard de idempotência (D-48) -> ingestão
@@ -81,7 +82,13 @@ export async function runDailyJob({ categoryNames } = {}) {
 // executa o corpo do CLI quando o módulo é executado diretamente — importar este
 // módulo em teste NUNCA dispara chamada de rede nem grava nada no banco.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const categoryNames = process.argv.slice(2).length > 0 ? process.argv.slice(2) : undefined;
+  // Sem argumentos, o job diário na nuvem ingere o CATÁLOGO COMPLETO (as 11
+  // categorias de taxonomia, D-26) — não apenas "Vestidos". Passar categorias
+  // explícitas na linha de comando continua funcionando (sobrepõe o default).
+  // A lista canônica vem de product-group.js (fonte única) para evitar digitar
+  // nomes acentuados no YAML do workflow.
+  const categoryNames =
+    process.argv.slice(2).length > 0 ? process.argv.slice(2) : ALL_TAXONOMY_CATEGORY_NAMES;
 
   runDailyJob({ categoryNames })
     .then((result) => {

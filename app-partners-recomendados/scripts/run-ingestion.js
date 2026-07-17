@@ -5,6 +5,11 @@
 // Uso: node --env-file=.env scripts/run-ingestion.js [categoria1] [categoria2] ...
 // (default ["Vestidos"] se nenhuma categoria for passada, D-01)
 //
+// Atalho: `--all` ingere as 11 categorias de taxonomia do catálogo completo
+// (ALL_TAXONOMY_CATEGORY_NAMES, D-26) sob um único run_id — evita digitar 11
+// nomes acentuados na linha de comando (onde acento/cedilha podem ser
+// corrompidos pelo shell).
+//
 // D-33 (Fase 03.1): cada argumento adicional de linha de comando é um nome de
 // categoria distinto — todas ficam sob o MESMO run_id (runIngestion({ categoryNames })),
 // corrigindo a limitação em que ingerir categorias em chamadas separadas fazia a
@@ -19,9 +24,15 @@
 // code correspondente ao sucesso/falha da execução.
 
 import { runIngestion } from '../src/ingestion/ingest-catalog.js';
+import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
 
 async function main() {
-  const categoryNames = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ['Vestidos'];
+  const args = process.argv.slice(2);
+  const categoryNames = args.includes('--all')
+    ? ALL_TAXONOMY_CATEGORY_NAMES
+    : args.length > 0
+      ? args
+      : ['Vestidos'];
 
   console.log(`\nIniciando ingestão completa da(s) categoria(s) "${categoryNames.join(', ')}"...`);
 

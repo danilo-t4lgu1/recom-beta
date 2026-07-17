@@ -32,6 +32,9 @@ jobs:
           NUVEMSHOP_ACCESS_TOKEN: ${{ secrets.NUVEMSHOP_ACCESS_TOKEN }}
           NUVEMSHOP_STORE_ID: ${{ secrets.NUVEMSHOP_STORE_ID }}
           WRITE_FAILURE_WEBHOOK_URL: ${{ secrets.WRITE_FAILURE_WEBHOOK_URL }}
+        # Sem argumentos, o script ingere o CATÁLOGO COMPLETO (as 11 categorias
+        # de taxonomia, D-26) — a lista canônica vive em product-group.js, então
+        # nenhum nome acentuado precisa ser digitado aqui no YAML.
         run: node scripts/run-daily-job.js
 
       - name: Commit-back do catálogo atualizado (D-45)
