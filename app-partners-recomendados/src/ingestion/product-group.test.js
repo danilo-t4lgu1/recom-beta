@@ -20,6 +20,7 @@ import {
   crossGroupOf,
   extractCategoryRaw,
   auditProductGroups,
+  ALL_TAXONOMY_CATEGORY_NAMES,
   GROUP_LOOK_INTEIRO,
   GROUP_PARTES_DE_CIMA,
   GROUP_PARTES_DE_BAIXO,
@@ -93,6 +94,36 @@ describe('extractCategoryRaw', () => {
     expect(extractCategoryRaw(product)).toBe('Blusas');
   });
 
+  it('escolhe a categoria de taxonomia mesmo quando NÃO é a primeira do array (ordenação real da API)', () => {
+    // Ordem real retornada pela API pública para um produto de Vestidos:
+    // a PRIMEIRA categoria é "Todos os Produtos" (navegação/raiz), a de
+    // taxonomia ("Vestidos") vem só no índice 2. Pegar categories[0]
+    // resolvia grupo nulo para o catálogo inteiro (motor devolvia 0 recs).
+    const product = {
+      categories: [
+        { id: 36655717, name: { pt: 'Todos os Produtos' } },
+        { id: 36839647, name: { pt: 'Look Inteiro' } },
+        { id: 36839648, name: { pt: 'Vestidos' } },
+        { id: 36440907, name: { pt: 'Últimas Oportunidades' } },
+      ],
+    };
+    expect(extractCategoryRaw(product)).toBe('Vestidos');
+    expect(resolveProductGroup(extractCategoryRaw(product))).toBe(GROUP_LOOK_INTEIRO);
+  });
+
+  it('cai na primeira categoria bruta quando NENHUMA resolve para grupo (preserva auditoria de não-mapeadas)', () => {
+    const product = {
+      categories: [
+        { id: 1, name: { pt: 'Todos os Produtos' } },
+        { id: 2, name: { pt: 'Acessórios' } },
+      ],
+    };
+    // Nenhuma mapeável -> retorna a primeira crua, para auditProductGroups
+    // ainda conseguir sinalizá-la como não-mapeada (Pitfall 3).
+    expect(extractCategoryRaw(product)).toBe('Todos os Produtos');
+    expect(resolveProductGroup(extractCategoryRaw(product))).toBeNull();
+  });
+
   it('retorna null (nunca lança) para shape ausente/vazio/malformado (Test 8)', () => {
     expect(extractCategoryRaw({ categories: [] })).toBeNull();
     expect(extractCategoryRaw({})).toBeNull();
@@ -104,6 +135,15 @@ describe('extractCategoryRaw', () => {
     expect(() => extractCategoryRaw(null)).not.toThrow();
     expect(() => extractCategoryRaw(undefined)).not.toThrow();
     expect(() => extractCategoryRaw({})).not.toThrow();
+  });
+});
+
+describe('ALL_TAXONOMY_CATEGORY_NAMES', () => {
+  it('lista as 11 categorias de taxonomia e todas resolvem para um grupo (guarda anti-drift com o mapa D-26)', () => {
+    expect(ALL_TAXONOMY_CATEGORY_NAMES).toHaveLength(11);
+    for (const name of ALL_TAXONOMY_CATEGORY_NAMES) {
+      expect(resolveProductGroup(name)).not.toBeNull();
+    }
   });
 });
 

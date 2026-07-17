@@ -67,6 +67,27 @@ const CATEGORY_TO_GROUP_MAP = new Map([
   ['saias', GROUP_PARTES_DE_BAIXO],
 ]);
 
+// Fonte única de verdade das 11 categorias de taxonomia do catálogo (D-26),
+// com a grafia exata da API pública (name.pt) — usada pela ingestão do
+// catálogo COMPLETO (run-ingestion.js --all, run-daily-job.js sem argumentos)
+// para não depender de digitar 11 nomes acentuados na linha de comando/YAML.
+// A ordem espelha os 3 grupos (Look Inteiro, Partes de Cima, Partes de Baixo).
+// Um teste garante que toda entrada aqui resolve para um grupo não-nulo — se
+// o mapa acima e esta lista divergirem, o teste falha (guarda contra drift).
+export const ALL_TAXONOMY_CATEGORY_NAMES = [
+  'Vestidos',
+  'Macacões',
+  'Macaquinhos',
+  'Blusas',
+  'Croppeds',
+  'Corsets',
+  'Camisas e Coletes',
+  'Blazers e Jaquetas',
+  'Calças',
+  'Shorts',
+  'Saias',
+];
+
 /**
  * Resolve a categoria bruta de um produto Nuvemshop (`product.categories[0].name.pt`,
  * já extraída por `extractCategoryRaw`) para um dos 3 grupos canônicos (D-26).
@@ -112,10 +133,27 @@ export function extractCategoryRaw(product) {
   const categories = product?.categories;
   if (!Array.isArray(categories) || categories.length === 0) return null;
 
-  const categoryPt = categories[0]?.name?.pt;
-  if (typeof categoryPt !== 'string') return null;
+  // A API pública da Nuvemshop retorna MÚLTIPLAS categorias por produto, e a
+  // PRIMEIRA é tipicamente uma categoria de navegação/raiz ("Todos os
+  // Produtos"), NÃO a categoria de taxonomia que o mapa D-26 espera
+  // (Vestidos/Blusas/Calças/...). Confirmado em produto real: a ordem retornada
+  // é ["Todos os Produtos", "Look Inteiro", "Vestidos", ...]. Pegar cegamente
+  // `categories[0]` fazia 100% dos produtos resolverem para grupo nulo (o motor
+  // então fail-closava e devolvia 0 recomendações para o catálogo inteiro).
+  // Correção: procurar a PRIMEIRA categoria cujo nome resolve para um grupo
+  // conhecido; só cair em `categories[0]` (grafia bruta) quando NENHUMA resolve,
+  // para que `auditProductGroups` continue enxergando a categoria bruta de
+  // produtos genuinamente fora do mapa (Pitfall 3, comportamento preservado).
+  for (const category of categories) {
+    const name = category?.name?.pt;
+    if (typeof name === 'string' && resolveProductGroup(name) != null) {
+      return name.trim();
+    }
+  }
 
-  return categoryPt.trim();
+  const firstName = categories[0]?.name?.pt;
+  if (typeof firstName !== 'string') return null;
+  return firstName.trim();
 }
 
 /**
