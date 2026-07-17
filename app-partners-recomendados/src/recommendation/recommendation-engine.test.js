@@ -73,27 +73,33 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
     expect(result).toEqual([]);
   });
 
-  it('exclui candidato com fabricTagCanonical null mesmo com cor igual e estoque (Test 3 / D-15)', () => {
-    const source = makeProduct({ productId: '1' });
+  it('INCLUI candidato sem tecido via cor+estoque quando a fonte tem tecido (Test 3 / override 2026-07-17, reverte D-15)', () => {
+    const source = makeProduct({ productId: '1' }); // Preto, Viscose
     const noFabric = makeProduct({
       productId: '2',
       fabricTagCanonical: null,
       variants: [makeVariant({ stockTotal: 5 })],
     });
+    // Override: tecido é opcional dos dois lados. Fonte tem tecido, candidato
+    // não — não sendo "ambos preenchidos", o tecido não filtra e vale só a cor.
     const result = recommendForProduct('1', [source, noFabric]);
-    expect(result).toEqual([]);
+    expect(result.map((r) => r.productId)).toEqual(['2']);
   });
 
-  it('fonte inelegível retorna [] sem lançar (Test 4)', () => {
+  it('fonte sem cor retorna [] sem lançar; fonte sem tecido NÃO é mais inelegível (Test 4 / override 2026-07-17)', () => {
+    // Fonte sem tecido agora recomenda por cor+estoque (reverte D-16), em vez
+    // de retornar [] como "inelegível".
     const sourceNoFabric = makeProduct({
       productId: '1',
       fabricTagCanonical: null,
       variants: [makeVariant({ stockTotal: 5 })],
     });
-    const candidate = makeProduct({ productId: '2' });
+    const candidate = makeProduct({ productId: '2' }); // Preto, mesma cor, com grade
     expect(() => recommendForProduct('1', [sourceNoFabric, candidate])).not.toThrow();
-    expect(recommendForProduct('1', [sourceNoFabric, candidate])).toEqual([]);
+    expect(recommendForProduct('1', [sourceNoFabric, candidate]).map((r) => r.productId)).toEqual(['2']);
 
+    // Cor, ao contrário do tecido, continua sempre obrigatória: fonte sem cor
+    // retorna [] (nunca lança).
     const sourceNoColor = makeProduct({ productId: '3', colorValue: null });
     const candidate2 = makeProduct({ productId: '4', colorValue: null });
     expect(() => recommendForProduct('3', [sourceNoColor, candidate2])).not.toThrow();
@@ -159,6 +165,15 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
       { sizeValue: 'M', stock: 0 },
       { sizeValue: 'G', stock: 2 },
     ]);
+  });
+
+  it('tecido opcional dos dois lados: casa mesmo-tecido, aceita candidato sem tecido, mas rejeita tecido diferente quando ambos têm (override 2026-07-17)', () => {
+    const source = makeProduct({ productId: '1', fabricTagCanonical: 'Viscose' });
+    const sameFabric = makeProduct({ productId: '2', fabricTagCanonical: 'Viscose' }); // ambos têm, igual -> ok
+    const noFabric = makeProduct({ productId: '3', fabricTagCanonical: null }); // um lado sem -> ok (cor+estoque)
+    const diffFabric = makeProduct({ productId: '4', fabricTagCanonical: 'Algodao' }); // ambos têm, diferente -> excluído
+    const result = recommendForProduct('1', [source, sameFabric, noFabric, diffFabric]);
+    expect(result.map((r) => r.productId).sort()).toEqual(['2', '3']);
   });
 
   it('duas chamadas consecutivas com o mesmo fixture retornam resultado deeply-equal (Test 9 / RULE-02)', () => {
@@ -382,7 +397,7 @@ describe('recommendForProduct - grupo e mescla (D-27-D-30, D-34, D-35)', () => {
     expect(result.map((r) => r.productId)).toEqual(['11', '12', '13', '14', '21', '22', '23', '24']);
   });
 
-  it('bloco cruzado aceita candidato sem tecido; bloco mesmo-grupo exige tecido (Test 21 / D-28, D-15 por bloco)', () => {
+  it('bloco mesmo-grupo TAMBÉM aceita candidato sem tecido via cor+estoque (Test 21 / override 2026-07-17); mesmo-grupo antes do cruzado (D-35)', () => {
     const source = makeProduct({
       productId: '1',
       colorValue: 'Preto',
@@ -404,8 +419,11 @@ describe('recommendForProduct - grupo e mescla (D-27-D-30, D-34, D-35)', () => {
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
     });
 
+    // Override: com tecido opcional dos dois lados, id2 (mesmo grupo, sem tecido)
+    // deixa de ser barrado e entra pelo bloco mesmo-grupo; id3 entra pelo cruzado.
+    // Ordem final: bloco mesmo-grupo antes do cruzado (D-35).
     const result = recommendForProduct('1', [source, sameGroupNullFabric, crossGroupNullFabric]);
-    expect(result.map((r) => r.productId)).toEqual(['3']);
+    expect(result.map((r) => r.productId)).toEqual(['2', '3']);
   });
 
   it('fonte de Partes de Baixo sem tecido canônico ainda gera o bloco cruzado (Test 22 / D-34)', () => {
