@@ -99,6 +99,17 @@ const selectLatestSuccessfulRun = db.prepare(
   `SELECT id FROM ingestion_runs WHERE status = 'success' ORDER BY id DESC LIMIT 1`
 );
 
+// Fase 6 (D-48/FEED-01/SC#2): guard de idempotência diária do job agendado —
+// `date(started_at) = date('now')` compara datas em UTC dos dois lados, já que
+// `started_at` é gravado via `new Date().toISOString()` em `startIngestionRun` e
+// `date('now')` do SQLite também é UTC por padrão (mesmo fuso, sem conversão
+// necessária). Diferente de `selectLatestSuccessfulRun` acima: esta é filtrada
+// por dia corrente, não apenas "a mais recente success" (uma success de ONTEM
+// não deve satisfazer o guard de hoje).
+const selectSuccessfulRunForTodayStmt = db.prepare(
+  `SELECT id FROM ingestion_runs WHERE status = 'success' AND date(started_at) = date('now') ORDER BY id DESC LIMIT 1`
+);
+
 const selectSnapshotsForRun = db.prepare(
   `SELECT s.product_id AS product_id, s.fabric_tag_canonical AS fabric_tag_canonical,
      s.has_available_grade AS has_available_grade, s.product_group_canonical AS product_group_canonical,
@@ -135,6 +146,18 @@ const upsertApprovalDecisionStmt = db.prepare(
      status=excluded.status,
      approved_recommendation_ids=excluded.approved_recommendation_ids,
      decided_at=excluded.decided_at`
+);
+
+// Fase 6 (D-47/D-48): usada exclusivamente por `scripts/run-daily-job.js` para
+// registrar quais produtos entraram na fila de aprovação nesta execução —
+// contraste deliberado com `upsertApprovalDecisionStmt` acima: aqui é sempre
+// `DO NOTHING`, nunca `DO UPDATE`, porque uma decisão humana já registrada
+// (approved/rejected) para o mesmo (product_id, run_id) NUNCA pode ser
+// sobrescrita por um seed automático de fila (T-06-01).
+const seedPendingApprovalQueueStmt = db.prepare(
+  `INSERT INTO approval_queue (product_id, run_id, status, approved_recommendation_ids, decided_at, created_at)
+   VALUES (@productId, @runId, 'pending', NULL, NULL, @createdAt)
+   ON CONFLICT(product_id, run_id) DO NOTHING`
 );
 
 const selectApprovalDecisionStmt = db.prepare(
@@ -274,6 +297,24 @@ export function getLatestSuccessfulRunId() {
 }
 
 /**
+ * Guard de idempotência diária do job agendado (D-48/FEED-01/SC#2, achado central
+ * da pesquisa da Fase 6, Pitfall 2 do 06-RESEARCH.md): retorna o `id` de uma
+ * `ingestion_runs` com `status = 'success'` cujo `started_at` cai no dia corrente
+ * (UTC), ou `null` se nenhuma existir ainda hoje. Uma run `success` de um dia
+ * ANTERIOR (mesmo sendo a mais recente no geral) NUNCA satisfaz este guard —
+ * distinto de `getLatestSuccessfulRunId` acima, que ignora data.
+ *
+ * Uso EXCLUSIVO de `scripts/run-daily-job.js` — nunca chamada por `runIngestion()`
+ * (o guard de "já rodou hoje" não pertence à função de ingestão em si, que sempre
+ * executa quando chamada).
+ * @returns {number|null}
+ */
+export function getSuccessfulRunForToday() {
+  const row = selectSuccessfulRunForTodayStmt.get();
+  return row ? row.id : null;
+}
+
+/**
  * Lê o "antes" do diff de aprovação (D-25): o `current_recommended_product_id`
  * gravado em `recommendation_baseline` para um run específico. Primeira função de
  * leitura desta tabela (só existia escrita até a Fase 4) — `recommendation_baseline`
@@ -339,6 +380,31 @@ export function listApprovalQueueChanges({ runId }) {
     approvedRecommendationIds: row.approved_recommendation_ids ? JSON.parse(row.approved_recommendation_ids) : null,
     decidedAt: row.decided_at,
   }));
+}
+
+/**
+ * Registra em `approval_queue` quais produtos entraram na fila de aprovação nesta
+ * execução do job diário (D-47), 1 linha `status = 'pending'` por entry de
+ * `queueEntries` (mesmo shape `{ productId }` do retorno de `buildReviewQueue`).
+ * Usa `ON CONFLICT(product_id, run_id) DO NOTHING` (nunca `DO UPDATE`) — chamar de
+ * novo para o MESMO (productId, runId) que já tem uma decisão `approved`/`rejected`
+ * registrada via `upsertApprovalDecision` NUNCA sobrescreve essa decisão (T-06-01).
+ * Todas as linhas de uma chamada compartilham o mesmo `createdAt` (uma única
+ * transação, mesmo padrão de batching de `persistIngestionBatch`).
+ * @param {{ runId: number, queueEntries: Array<{ productId: string|number }> }} params
+ * @returns {void}
+ */
+export function seedPendingApprovalQueue({ runId, queueEntries }) {
+  const createdAt = new Date().toISOString();
+  const entries = Array.isArray(queueEntries) ? queueEntries : [];
+
+  const seed = db.transaction(() => {
+    for (const entry of entries) {
+      seedPendingApprovalQueueStmt.run({ productId: String(entry.productId), runId, createdAt });
+    }
+  });
+
+  seed();
 }
 
 /**
@@ -503,6 +569,27 @@ export function finishIngestionRun({ runId, status, productsRead }) {
     status,
     productsRead,
   });
+}
+
+/**
+ * Mescla o WAL (Write-Ahead Log) no arquivo principal `.db` e fecha a conexão —
+ * uso EXCLUSIVO de produção (orquestrador do job agendado, `scripts/run-daily-job.js`,
+ * D-45/D-46/Pitfall 1 do 06-RESEARCH.md): sem este checkpoint explícito antes de
+ * `close()`, escritas recentes em modo `journal_mode = WAL` poderiam permanecer só
+ * no arquivo `.db-wal` e se perder silenciosamente antes do commit-back em CI (o
+ * processo Node do job agendado é efêmero, não há checkpoint automático por
+ * tamanho de WAL a tempo). NUNCA chamada em uso normal local nem em testes comuns
+ * (que usam `closeDbForTests` abaixo).
+ *
+ * Chamar `db.close()` uma segunda vez depois desta função (ex: o `afterEach`
+ * compartilhado de `catalog-store.test.js` chamando `closeDbForTests()` no mesmo
+ * teste) é seguro — `better-sqlite3` trata a segunda chamada de `close()` como
+ * no-op (confirmado empiricamente nesta fase).
+ * @returns {void}
+ */
+export function checkpointAndCloseDb() {
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  db.close();
 }
 
 /**

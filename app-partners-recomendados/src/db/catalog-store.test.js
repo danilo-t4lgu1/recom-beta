@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -489,5 +489,122 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].productId).toBe('prod-d');
     expect(rows[1].productId).toBe('prod-c');
+  });
+});
+
+describe('getSuccessfulRunForToday / seedPendingApprovalQueue / checkpointAndCloseDb (Fase 6, D-45/D-46/D-47/D-48)', () => {
+  /**
+   * Grava um produto real na tabela `products` — mesmo motivo já documentado no
+   * describe de write_log acima (FOREIGN KEY constraint).
+   * @param {object} store módulo catalog-store.js já importado dinamicamente
+   * @param {string} productId
+   * @returns {number} runId gerado
+   */
+  function seedProduct(store, productId) {
+    const runId = store.startIngestionRun({ categoryId: '555', categoryName: 'Vestidos' });
+    store.persistIngestionBatch({
+      runId,
+      records: {
+        products: [{ id: productId, name: 'Produto Teste', handle: productId, canonicalUrl: `https://x/${productId}` }],
+      },
+    });
+    return runId;
+  }
+
+  it('getSuccessfulRunForToday() retorna null num banco sem nenhuma linha ingestion_runs (Test 17)', async () => {
+    const store = await import('./catalog-store.js');
+
+    expect(store.getSuccessfulRunForToday()).toBeNull();
+  });
+
+  it('getSuccessfulRunForToday() retorna o id de uma run success de HOJE, nunca uma failed/running de hoje (Test 18)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runIdRunning = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+    store.finishIngestionRun({ runId: runIdRunning, status: 'failed', productsRead: 0 });
+
+    const runIdSuccess = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+    store.finishIngestionRun({ runId: runIdSuccess, status: 'success', productsRead: 0 });
+
+    expect(store.getSuccessfulRunForToday()).toBe(runIdSuccess);
+  });
+
+  it('getSuccessfulRunForToday() NÃO retorna uma run success cujo started_at é de um dia anterior, mesmo sendo a success mais recente no geral (Test 19)', async () => {
+    const dbPath = join(tempDir, 'catalog.db');
+    const store = await import('./catalog-store.js');
+
+    const runId = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+    store.finishIngestionRun({ runId, status: 'success', productsRead: 0 });
+
+    // Sobrescreve started_at para uma data passada usando uma instância Database
+    // própria e independente (mesmo padrão de createLegacyDb já existente neste
+    // arquivo) — não reabre o módulo já importado, evitando conflito de lock.
+    const rewriter = new Database(dbPath);
+    rewriter.prepare(`UPDATE ingestion_runs SET started_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`).run(runId);
+    rewriter.close();
+
+    expect(store.getSuccessfulRunForToday()).toBeNull();
+  });
+
+  it('seedPendingApprovalQueue() insere 1 linha pending por entry e NUNCA sobrescreve uma decisão approved/rejected já registrada (Test 20)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'prod-seed-a');
+
+    store.upsertApprovalDecision({
+      productId: 'prod-seed-a',
+      runId,
+      status: 'approved',
+      approvedRecommendationIds: ['x', 'y'],
+      decidedAt: new Date().toISOString(),
+    });
+
+    store.seedPendingApprovalQueue({ runId, queueEntries: [{ productId: 'prod-seed-a' }] });
+
+    const decision = store.getApprovalDecision({ productId: 'prod-seed-a', runId });
+    expect(decision).toEqual({ status: 'approved', approvedRecommendationIds: ['x', 'y'] });
+
+    const changes = store.listApprovalQueueChanges({ runId });
+    expect(changes).toHaveLength(1);
+    expect(changes[0].status).toBe('approved');
+  });
+
+  it('seedPendingApprovalQueue() grava status pending para um produto sem decisão prévia (Test 21)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'prod-seed-b');
+
+    store.seedPendingApprovalQueue({ runId, queueEntries: [{ productId: 'prod-seed-b' }] });
+
+    const changes = store.listApprovalQueueChanges({ runId });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ productId: 'prod-seed-b', status: 'pending', approvedRecommendationIds: null });
+  });
+
+  it('checkpointAndCloseDb() mescla o WAL (arquivo .db-wal fica com tamanho 0) e os dados gravados sobrevivem em uma nova conexão (Test 22)', async () => {
+    const dbPath = join(tempDir, 'catalog.db');
+    const store = await import('./catalog-store.js');
+    seedProduct(store, 'prod-wal');
+
+    expect(() => store.checkpointAndCloseDb()).not.toThrow();
+
+    const check = new Database(dbPath);
+    const row = check.prepare('SELECT id FROM products WHERE id = ?').get('prod-wal');
+    check.close();
+    expect(row).toBeDefined();
+
+    // Deviation (Rule 1, achado empírico nesta fase): o plano previa
+    // "arquivo .db-wal fica com tamanho 0 bytes logo após a chamada", mas
+    // `checkpointAndCloseDb()` termina com `db.close()` — e o better-sqlite3/SQLite
+    // REMOVE o arquivo -wal (unlink) ao fechar a última conexão depois de um
+    // checkpoint TRUNCATE bem-sucedido (confirmado empiricamente nesta fase via
+    // reprodução isolada), em vez de deixá-lo presente com 0 bytes. O teste aceita
+    // os dois resultados observáveis (ausente OU 0 bytes) — ambos provam a mesma
+    // garantia real: nenhum dado pendente sobrando fora do arquivo principal .db.
+    const walPath = join(tempDir, 'catalog.db-wal');
+    const walSize = statSync(walPath, { throwIfNoEntry: false })?.size ?? 0;
+    expect(walSize).toBe(0);
+
+    // Nenhuma chamada extra a store.closeDbForTests() aqui — o afterEach
+    // compartilhado do arquivo já cobre isso com segurança (ver JSDoc de
+    // checkpointAndCloseDb em catalog-store.js: close() duas vezes é no-op).
   });
 });
