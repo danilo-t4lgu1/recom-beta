@@ -48,6 +48,13 @@
   var ANCHOR_BEFORE_SELECTOR = '#product-description';
   var ANCHOR_AFTER_SELECTOR = '#compre-junto-block';
 
+  // Cache TTL de 24h (D-50, FRNT-02/SC#4): evita uma nova chamada de rede ao
+  // endpoint de recomendacoes numa segunda visualizacao da mesma pagina de
+  // produto, dentro da mesma sessao do navegador. sessionStorage nativo, sem
+  // dependencia nova.
+  var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  var CACHE_KEY_PREFIX = 'recomendados_cache_';
+
   // -------------------------------------------------------------------------
   // Passo 1: obter o ID do produto atual da pagina real
   // -------------------------------------------------------------------------
@@ -104,6 +111,49 @@
         }
         return response.json();
       });
+  }
+
+  // -------------------------------------------------------------------------
+  // Passo 2.5: cache TTL de 24h (D-50, FRNT-02/SC#4)
+  // -------------------------------------------------------------------------
+  //
+  // Funcoes puras testaveis por injecao de dependencia (storage/now recebidos
+  // como parametro) - nunca leem window.sessionStorage/Date.now() diretamente
+  // no proprio corpo, mesma disciplina de testabilidade ja usada em
+  // approval-gate.js/CATALOG_DB_DIR do backend (Pattern 4 do 06-RESEARCH.md).
+  function getCachedRecommendation(storage, productId, now) {
+    var raw = storage.getItem(CACHE_KEY_PREFIX + productId);
+    if (!raw) {
+      return null;
+    }
+
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      // Entrada corrompida/JSON invalido no storage (T-06-10) - degrada para
+      // cache miss, nunca lanca nem propaga dado malformado adiante.
+      return null;
+    }
+
+    if (now - parsed.cachedAt > CACHE_TTL_MS) {
+      return null;
+    }
+
+    return parsed.data;
+  }
+
+  function setCachedRecommendation(storage, productId, data, now) {
+    try {
+      storage.setItem(
+        CACHE_KEY_PREFIX + productId,
+        JSON.stringify({ data: data, cachedAt: now })
+      );
+    } catch (e) {
+      // Degradacao graciosa: Safari modo privado/quota excedida lancam aqui -
+      // mesma disciplina do fetchRecommendation().catch() ja existente neste
+      // arquivo. Nao ha nada a fazer, a proxima visita apenas volta a buscar.
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -200,8 +250,28 @@
       return;
     }
 
+    // Cache TTL de 24h (D-50, FRNT-02/SC#4): consulta o cache ANTES de chamar
+    // fetchRecommendation. Em cache hit, renderiza a partir do cache e
+    // retorna cedo - zero chamada de rede nova nesta visita.
+    var cached = getCachedRecommendation(window.sessionStorage, productId, Date.now());
+    if (cached) {
+      if (cached.recommendedProductId && cached.recommendedProduct) {
+        var insertedFromCache = renderRecommendationBlock(cached.recommendedProduct);
+        if (!insertedFromCache) {
+          console.warn(
+            '[recomendados-alpha] Nao foi possivel encontrar ' +
+            ANCHOR_BEFORE_SELECTOR + ' nem ' + ANCHOR_AFTER_SELECTOR +
+            ' no DOM para ancorar o bloco de recomendacao (cache).'
+          );
+        }
+      }
+      return;
+    }
+
     fetchRecommendation(productId)
       .then(function (data) {
+        setCachedRecommendation(window.sessionStorage, productId, data, Date.now());
+
         if (data && data.recommendedProductId && data.recommendedProduct) {
           var inserted = renderRecommendationBlock(data.recommendedProduct);
           if (!inserted) {
@@ -217,6 +287,14 @@
         console.warn('[recomendados-alpha] Falha ao buscar recomendacao:', err);
       });
   }
+
+  // Guard de exportacao SOMENTE para teste (main.test.js): permite importar
+  // getCachedRecommendation/setCachedRecommendation sem jsdom nem executar o
+  // restante do arquivo (que depende de document/window reais). Em producao,
+  // dentro de uma tag <script> classica real no navegador, `module` nunca e
+  // declarado - `typeof module` avalia para 'undefined' com seguranca (nunca
+  // lanca ReferenceError) e este bloco nunca executa.
+  if (typeof module !== 'undefined' && module.exports) { module.exports = { getCachedRecommendation: getCachedRecommendation, setCachedRecommendation: setCachedRecommendation }; return; }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
