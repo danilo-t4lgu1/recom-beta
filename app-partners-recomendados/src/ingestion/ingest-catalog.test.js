@@ -24,6 +24,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listCategories, listProducts, getMetafields } from '../nuvemshop-client/client.js';
+import { resolveMinSizesInStock } from './ingest-catalog.js';
 
 vi.mock('../nuvemshop-client/client.js', () => ({
   listCategories: vi.fn(),
@@ -196,5 +197,22 @@ describe('ingest-catalog.js', () => {
     const rows = getLatestSnapshotProducts();
     const sharedRows = rows.filter((row) => row.productId === 'shared-1');
     expect(sharedRows.length).toBe(1);
+  });
+});
+
+describe('resolveMinSizesInStock (toggle de liquidação, override 2026-07-17)', () => {
+  it('default 3 quando o ambiente está ausente/vazio/inválido (regra original D-04)', () => {
+    expect(resolveMinSizesInStock(undefined)).toBe(3);
+    expect(resolveMinSizesInStock('')).toBe(3);
+    expect(resolveMinSizesInStock('abc')).toBe(3);
+    expect(resolveMinSizesInStock('0')).toBe(3); // < 1 cai no default seguro
+    expect(resolveMinSizesInStock('-2')).toBe(3);
+  });
+
+  it('afrouxa para o valor do ambiente quando é inteiro >= 1', () => {
+    expect(resolveMinSizesInStock('1')).toBe(1); // modo liquidação: qualquer tamanho com estoque
+    expect(resolveMinSizesInStock('2')).toBe(2);
+    expect(resolveMinSizesInStock('3')).toBe(3);
+    expect(resolveMinSizesInStock('5')).toBe(5);
   });
 });

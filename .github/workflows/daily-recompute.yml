@@ -32,6 +32,13 @@ jobs:
           NUVEMSHOP_ACCESS_TOKEN: ${{ secrets.NUVEMSHOP_ACCESS_TOKEN }}
           NUVEMSHOP_STORE_ID: ${{ secrets.NUVEMSHOP_STORE_ID }}
           WRITE_FAILURE_WEBHOOK_URL: ${{ secrets.WRITE_FAILURE_WEBHOOK_URL }}
+          # Toggle de liquidação (override 2026-07-17): limiar de "grade
+          # disponível" (D-04). Vazio => default 3 (grade cheia, operação
+          # normal). Defina a variável de repositório MIN_SIZES_IN_STOCK=1 em
+          # Settings > Secrets and variables > Actions > Variables para afrouxar
+          # para "qualquer tamanho com estoque" durante promoções agressivas —
+          # liga/desliga sem editar código nem redeploy.
+          MIN_SIZES_IN_STOCK: ${{ vars.MIN_SIZES_IN_STOCK }}
         # Sem argumentos, o script ingere o CATÁLOGO COMPLETO (as 11 categorias
         # de taxonomia, D-26) — a lista canônica vive em product-group.js, então
         # nenhum nome acentuado precisa ser digitado aqui no YAML.

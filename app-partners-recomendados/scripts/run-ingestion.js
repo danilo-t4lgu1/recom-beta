@@ -42,7 +42,7 @@ async function main() {
   console.log(`  run_id: ${result.runId}`);
   console.log(`  status: ${result.status}`);
   console.log(`  Produtos lidos: ${result.productsRead}`);
-  console.log(`  Produtos disponíveis (grade >= 3 tamanhos, D-04): ${result.availableCount}`);
+  console.log(`  Produtos disponíveis (grade, D-04 — limiar MIN_SIZES_IN_STOCK=${process.env.MIN_SIZES_IN_STOCK || '3'}): ${result.availableCount}`);
   console.log(`  Tags brutas distintas auditadas (DATA-03): ${result.distinctTagCount}`);
   console.log(`  Tags não mapeadas para valor canônico: ${result.unmappedTagCount}`);
   console.log(`  Categorias de produto não mapeadas para grupo canônico (D-26): ${result.unmappedCategoryCount}`);

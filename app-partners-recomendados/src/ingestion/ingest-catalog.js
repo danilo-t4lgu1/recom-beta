@@ -15,7 +15,26 @@ import { auditFabricTags, resolveFabricTagFromTags } from './fabric-taxonomy.js'
 import { resolveProductGroup, extractCategoryRaw, auditProductGroups } from './product-group.js';
 import { startIngestionRun, persistIngestionBatch, finishIngestionRun, getCanonicalMap } from '../db/catalog-store.js';
 
-const MIN_SIZES_IN_STOCK = 3; // D-04: regra de negócio nomeada, nunca inline
+/**
+ * Resolve o limiar de "grade disponível" (D-04) a partir do valor bruto de
+ * ambiente `MIN_SIZES_IN_STOCK`. Default 3 (regra de negócio original D-04);
+ * `MIN_SIZES_IN_STOCK=1` afrouxa para "qualquer tamanho com estoque", usado em
+ * liquidações agressivas em que o estoque fica muito degradado (override
+ * 2026-07-17). Valor ausente, não-numérico ou < 1 cai no default 3 — toggle
+ * operacional seguro por ambiente, sem editar código. Recomputado na ingestão
+ * (o `hasAvailableGrade` é gravado no snapshot), então trocar o limiar exige
+ * re-ingerir para valer.
+ * @param {string|undefined} rawValue
+ * @returns {number}
+ */
+export function resolveMinSizesInStock(rawValue) {
+  const parsed = Number.parseInt(rawValue ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : 3;
+}
+
+// D-04: regra de negócio nomeada, nunca inline — agora com limiar configurável
+// por ambiente (toggle de liquidação, override 2026-07-17).
+const MIN_SIZES_IN_STOCK = resolveMinSizesInStock(process.env.MIN_SIZES_IN_STOCK);
 const RECOMMENDATION_NAMESPACE = 'recomendados';
 const RECOMMENDATION_KEY = 'produto_sugerido';
 
