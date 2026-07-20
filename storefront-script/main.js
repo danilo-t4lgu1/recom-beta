@@ -220,10 +220,12 @@
     return (
       '<div class="container-fluid position-relative" id="' + BLOCK_ID + '" style="margin:24px 0;">' +
       '<div class="recomendados-motor-header" style="display:block !important;text-align:center;margin-bottom:16px;">' +
-      '<h2 class="section-title section-title-products-home" ' +
-      'style="font-family:Arial,Helvetica,sans-serif;font-size:1.6rem;font-weight:700;letter-spacing:.04em;margin:0 0 4px;">RECOMENDADOS</h2>' +
-      '<a class="link-text" href="/produtos" ' +
-      'style="display:inline-block;font-size:.98rem;text-decoration:underline;color:#555;">Compre Agora</a>' +
+      // Sem override de fonte: as classes nativas do tema (.section-title
+      // .section-title-products-home / .link-text) estilizam identico ao
+      // "NOVIDADES" da home (fonte Graphik Wide Trial 24px/500 uppercase; link
+      // Poppins sublinhado). So mantemos margem/centralizacao pelo wrapper.
+      '<h2 class="section-title section-title-products-home" style="margin:0 0 6px;">RECOMENDADOS</h2>' +
+      '<a class="link-text" href="/produtos" style="display:inline-block;">Compre Agora</a>' +
       '</div>' +
       '<div class="swiper js-recomendados-swiper products-section section-products-related position-relative" style="overflow:hidden;">' +
       '<div class="swiper-wrapper">' + slides + '</div>' +
