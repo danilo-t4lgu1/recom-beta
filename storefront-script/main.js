@@ -219,7 +219,7 @@
     // "RECOMENDADOS" (maior, sans-serif) + "Compre Agora" (menor, sublinhado).
     return (
       '<div class="container-fluid position-relative" id="' + BLOCK_ID + '" style="margin:24px 0;">' +
-      '<div class="header-related" style="text-align:center;margin-bottom:16px;">' +
+      '<div class="recomendados-motor-header" style="display:block !important;text-align:center;margin-bottom:16px;">' +
       '<h2 class="section-title section-title-products-home" ' +
       'style="font-family:Arial,Helvetica,sans-serif;font-size:1.35rem;letter-spacing:.04em;margin:0 0 4px;">RECOMENDADOS</h2>' +
       '<a class="link-text" href="/produtos" ' +
