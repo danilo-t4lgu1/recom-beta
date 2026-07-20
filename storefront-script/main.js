@@ -169,8 +169,8 @@
       // DESKTOP (>=768): bloco ~20% menor (nome/preco/chip), mas FLAG +30%.
       '@media (min-width:768px){' +
       B + '.rec-name{font-size:.92rem;}' +
-      B + '.rec-now{font-size:.92rem;}' +
-      B + '.rec-old{font-size:.75rem;}' +
+      B + '.rec-now{font-size:1.2rem;}' + // +30% no desktop (preco promocional)
+      B + '.rec-old{font-size:.98rem;}' + // +30% no desktop (preco cheio riscado)
       B + '.rec-flag{font-size:1.14rem;padding:3px 9px;}' +
       B + '.rec-chip{min-width:21px;font-size:10.5px;padding:2px 4px;}' +
       '}' +
