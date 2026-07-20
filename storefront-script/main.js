@@ -7,17 +7,23 @@
  * Este script foi construido deliberadamente com a Script API legada (JS puro,
  * acesso direto ao DOM), NAO com NubeSDK, como uma decisao explicita e assumida
  * pelo usuario em 2026-07-10, enquanto a ativacao do NubeSDK para o tema Morelia
- * da loja ainda esta pendente de aprovacao externa. Apps sem NubeSDK deixam de
- * poder receber novas instalacoes a partir de 30/ago/2026 e enfrentam remocao
+ * da loja ainda esta pendente de submissao. Apps sem NubeSDK deixam de poder
+ * receber novas instalacoes a partir de 30/ago/2026 e enfrentam remocao
  * progressiva a partir de 30/out/2026 — ou seja, este arquivo tem vida util
- * garantida de poucas semanas e PRECISARA ser reconstruido do zero em NubeSDK
- * (modelo de execucao totalmente diferente: Web Worker sandbox + UI Slots +
- * nube.render(), sem acesso a `document`) quando a ativacao for aprovada. Nao
- * tratar este arquivo como base incremental para o script NubeSDK futuro.
+ * curta e PRECISARA ser reconstruido em NubeSDK (Web Worker sandbox + UI Slots +
+ * nube.render(), sem acesso a `document`) quando a ativacao for aprovada.
  *
  * Este script roda direto no navegador do visitante (injetado via tag <script>
  * pelo Partners Portal), com acesso irrestrito ao DOM — por isso manipulacao
  * direta de `document.*` e esperada e correta aqui (ao contrario do NubeSDK).
+ *
+ * OBJETIVO (2026-07-20): renderizar o bloco "Recomendados" no MESMO FORMATO do
+ * bloco nativo "Produtos Relacionados" do tema Morelia (carrossel Swiper, cards
+ * `col-6 col-md-3`), porem alimentado pela saida do nosso motor (ate 8 produtos,
+ * dentro dos criterios do projeto), em vez da logica de relacionados do tema.
+ * Reusa as classes de CSS do proprio tema (`header-related`, `swiper-*`,
+ * `js-item-product`, `js-item-name`) para herdar o estilo nativo, e inicializa
+ * uma instancia propria de `window.Swiper` (disponivel globalmente no tema).
  */
 
 (function () {
@@ -26,62 +32,23 @@
   // -------------------------------------------------------------------------
   // Configuracao
   // -------------------------------------------------------------------------
-
-  // URL do backend proprio (app-partners-recomendados), publicada no Wave 4
-  // (01-05) como Vercel Serverless Function no MESMO projeto que ja hospeda
-  // os webhooks LGPD (plano 01-02): https://app-partners-recomendados.vercel.app.
-  // Rota correspondente: api/recommendations/[productId].js (convencao de rota
-  // dinamica do Vercel) — por isso o path abaixo e '/api/recommendations/'
-  // (nao '/recommendations/', usado apenas pelo server.js local de 01-03).
   var BACKEND_URL = 'https://app-partners-recomendados.vercel.app';
 
   // Posicao exata documentada em 01-04-SUMMARY.md (D-03): o bloco customizado
-  // deve renderizar como irmao, entre o bloco "compre junto" e a secao de
-  // descricao do produto — mesmo lugar onde o bloco nativo "Produtos
-  // Relacionados" aparecia antes de ser suprimido via CSS (01-04).
-  // Reconfirmado no Wave 4 (01-05, Task 1 adaptada per override D-11): os dois
-  // seletores abaixo (#product-description / #compre-junto-block) continuam
-  // batendo exatamente com a posicao documentada em 01-04-SUMMARY.md — nenhum
-  // ajuste foi necessario. Nao ha slot NubeSDK nem build/bundle step neste
-  // v.Alpha (Script API tradicional), entao a Task 1 original do plano
-  // (ajustar slot `nube.render()` + rebuild `tsup`) nao se aplica.
+  // renderiza entre o bloco "compre junto" e a secao de descricao do produto —
+  // mesmo lugar onde o bloco nativo "Produtos Relacionados" aparecia.
   var ANCHOR_BEFORE_SELECTOR = '#product-description';
   var ANCHOR_AFTER_SELECTOR = '#compre-junto-block';
 
-  // Cache TTL de 24h (D-50, FRNT-02/SC#4): evita uma nova chamada de rede ao
-  // endpoint de recomendacoes numa segunda visualizacao da mesma pagina de
-  // produto, dentro da mesma sessao do navegador. sessionStorage nativo, sem
-  // dependencia nova.
+  var BLOCK_ID = 'recomendados-motor-block';
+
+  // Cache TTL de 24h (D-50, FRNT-02/SC#4).
   var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   var CACHE_KEY_PREFIX = 'recomendados_cache_';
 
   // -------------------------------------------------------------------------
-  // Passo 1: obter o ID do produto atual da pagina real
+  // Passo 1: id do produto atual (window.LS.product.id — ver 01-05)
   // -------------------------------------------------------------------------
-  //
-  // Mecanismo escolhido: `window.LS.product.id`.
-  //
-  // Por que: inspecionando o HTML real publicado em
-  // https://talgui.com.br/produtos/vestido-elaine-preto/ (curl -s -L, 2026-07-10),
-  // o tema (familia Nuvemshop/LojaIntegrada "Morelia") expoe um objeto global
-  // `LS.product` inline no <script> da propria pagina, contendo o produto atual:
-  //
-  //   LS.product = {
-  //       id : 349886153,
-  //       name : 'Vestido Elaine Preto',
-  //       requires_shipping: true,
-  //       ...
-  //   };
-  //
-  // Essa atribuicao aparece exatamente 1 vez na pagina (confirmado via busca no
-  // HTML bruto), diferente de outros campos como `data-product-id="..."` (que
-  // aparecem repetidos nos cards de produtos relacionados/vitrine — nao servem
-  // para identificar o produto principal da pagina) ou o destructure inline
-  // `const { id: productId, price: productPrice } = {...}` usado internamente
-  // pelo tema para tracking de analytics (nao e um global estavel, e uma
-  // variavel de escopo de funcao). `window.LS.product.id` e a fonte mais
-  // confiavel: e um global explicito, atribuido uma unica vez, exatamente para
-  // este proposito (o proprio tema o usa para `LS.currency`, `LS.cart`, etc.).
   function getCurrentProductId() {
     if (
       window.LS &&
@@ -95,86 +62,63 @@
   }
 
   // -------------------------------------------------------------------------
-  // Passo 2: buscar a recomendacao no backend proprio
+  // Passo 2: buscar recomendacoes no backend proprio (PLAT-05)
   // -------------------------------------------------------------------------
-  //
-  // Fala SOMENTE com o endpoint proprio (Task 1 deste plano). Nunca chama a
-  // API publica oficial da Nuvemshop (Tiendanube) diretamente — nenhum
-  // access_token/client_secret da Nuvemshop e embutido neste arquivo
-  // client-side (mesma fronteira PLAT-05 do endpoint do backend).
   function fetchRecommendation(productId) {
     var url = BACKEND_URL + '/api/recommendations/' + encodeURIComponent(productId);
-    return fetch(url, { method: 'GET' })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error('recommendations endpoint respondeu status ' + response.status);
-        }
-        return response.json();
-      });
+    return fetch(url, { method: 'GET' }).then(function (response) {
+      if (!response.ok) {
+        throw new Error('recommendations endpoint respondeu status ' + response.status);
+      }
+      return response.json();
+    });
   }
 
   // -------------------------------------------------------------------------
-  // Passo 2.5: cache TTL de 24h (D-50, FRNT-02/SC#4)
+  // Passo 2.5: cache TTL de 24h (D-50) — funcoes puras testaveis por injecao
   // -------------------------------------------------------------------------
-  //
-  // Funcoes puras testaveis por injecao de dependencia (storage/now recebidos
-  // como parametro) - nunca leem window.sessionStorage/Date.now() diretamente
-  // no proprio corpo, mesma disciplina de testabilidade ja usada em
-  // approval-gate.js/CATALOG_DB_DIR do backend (Pattern 4 do 06-RESEARCH.md).
   function getCachedRecommendation(storage, productId, now) {
     var raw = storage.getItem(CACHE_KEY_PREFIX + productId);
-    if (!raw) {
-      return null;
-    }
-
+    if (!raw) return null;
     var parsed;
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
-      // Entrada corrompida/JSON invalido no storage (T-06-10) - degrada para
-      // cache miss, nunca lanca nem propaga dado malformado adiante.
       return null;
     }
-
-    if (now - parsed.cachedAt > CACHE_TTL_MS) {
-      return null;
-    }
-
+    if (now - parsed.cachedAt > CACHE_TTL_MS) return null;
     return parsed.data;
   }
 
   function setCachedRecommendation(storage, productId, data, now) {
     try {
-      storage.setItem(
-        CACHE_KEY_PREFIX + productId,
-        JSON.stringify({ data: data, cachedAt: now })
-      );
+      storage.setItem(CACHE_KEY_PREFIX + productId, JSON.stringify({ data: data, cachedAt: now }));
     } catch (e) {
-      // Degradacao graciosa: Safari modo privado/quota excedida lancam aqui -
-      // mesma disciplina do fetchRecommendation().catch() ja existente neste
-      // arquivo. Nao ha nada a fazer, a proxima visita apenas volta a buscar.
+      /* Safari privado/quota — degrada silenciosamente (mesma disciplina do fetch.catch) */
     }
   }
 
   // -------------------------------------------------------------------------
-  // Passo 3: renderizar o bloco "Recomendados" no DOM
+  // Passo 3: normalizar o payload para uma lista de produtos
   // -------------------------------------------------------------------------
   //
-  // Correcao pos-verificacao-visual do Wave 4: a primeira versao deste v.Alpha
-  // linkava para `/produtos/{id}` (ID numerico), que sempre resulta em 404 —
-  // a rota real da Nuvemshop usa o "Identificador URL" (handle) do produto,
-  // nao o ID. O backend agora retorna `recommendedProduct.url` ja pronto
-  // (canonical_url da API publica), alem de nome/imagem/preco, entao o bloco
-  // deixou de ser so um link de texto generico.
-  // Achado do code review de fechamento da Fase 1 (CR-01): nome/URL/imagem do
-  // produto recomendado vem da API publica da Nuvemshop (catalogo, editavel
-  // pelo lojista) e era concatenado direto no HTML sem escapar — um nome de
-  // produto com `"`/`<`/`>` quebra o atributo ou injeta markup na pagina real.
-  // Sem isso a pagina fica vulneravel a HTML injection vindo de um campo de
-  // catalogo, independente da divida ja documentada do v.Alpha (D-11, que
-  // cobre o modelo de execucao do script, nao escaping de saida).
+  // Aceita o formato novo (recommendedProducts: []) e o legado (recommendedProduct
+  // singular), para nunca quebrar durante a transicao do backend.
+  function extractProducts(data) {
+    if (!data) return [];
+    if (Array.isArray(data.recommendedProducts) && data.recommendedProducts.length) {
+      return data.recommendedProducts;
+    }
+    if (data.recommendedProduct) return [data.recommendedProduct];
+    return [];
+  }
+
+  // -------------------------------------------------------------------------
+  // Passo 4: escaping de saida (CR-01 da Fase 1 — nome/URL vem do catalogo,
+  // editavel pelo lojista; nunca concatenar cru no HTML)
+  // -------------------------------------------------------------------------
   function escapeHtml(str) {
-    return String(str)
+    return String(str == null ? '' : str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -182,119 +126,143 @@
       .replace(/'/g, '&#39;');
   }
 
-  function renderRecommendationBlock(recommendedProduct) {
-    var safeUrl = escapeHtml(recommendedProduct.url);
-    var safeName = escapeHtml(recommendedProduct.name);
-    var safeImage = recommendedProduct.image ? escapeHtml(recommendedProduct.image) : null;
+  function formatPrice(price) {
+    if (price == null || price === '') return '';
+    // A API devolve preco como string "349.90"; exibe no padrao BRL "R$ 349,90".
+    var normalized = String(price).replace('.', ',');
+    return 'R$ ' + normalized;
+  }
+
+  // -------------------------------------------------------------------------
+  // Passo 5: renderizar o bloco no FORMATO NATIVO + inicializar o carrossel
+  // -------------------------------------------------------------------------
+  //
+  // Reusa as classes do tema Morelia (capturadas ao vivo em 2026-07-20):
+  //   header:  .header-related > h2.section-title.section-title-products-home
+  //   card:    .swiper-slide.js-item-product.item-product + .js-item-name.item-name
+  // Mantem o bloco nativo oculto (ele mostra os relacionados do tema, nao os
+  // nossos) e insere ESTE bloco na posicao D-03, com Swiper proprio.
+  function buildSlideHtml(product) {
+    var safeUrl = escapeHtml(product.url);
+    var safeName = escapeHtml(product.name);
+    var safeImage = product.image ? escapeHtml(product.image) : null;
+    var priceText = escapeHtml(formatPrice(product.price));
 
     var imageHtml = safeImage
-      ? '<img src="' + safeImage + '" alt="' + safeName + '" ' +
-        'style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0;">'
-      : '';
-    var priceHtml = recommendedProduct.price
-      ? '<div style="color: #555; margin-top: 4px;">R$ ' + escapeHtml(recommendedProduct.price) + '</div>'
+      ? '<img src="' + safeImage + '" alt="' + safeName + '" loading="lazy" ' +
+        'style="width:100%;height:auto;display:block;border-radius:4px;object-fit:cover;aspect-ratio:3/4;">'
       : '';
 
-    // Envolvido em .container-fluid.position-relative para herdar o mesmo
-    // padding/alinhamento horizontal que as demais secoes da pagina de produto
-    // ja usam neste tema (Morelia) — sem isso, o bloco ficava colado na borda
-    // esquerda da tela, fora do alinhamento do restante do conteudo (achado da
-    // verificacao visual do Wave 4).
-    var html =
-      '<div class="container-fluid position-relative">' +
-      '<div id="recomendados-alpha-block" style="margin: 16px 0;">' +
-      '<h2 style="font-size: 1.1em; margin-bottom: 8px;">Recomendados</h2>' +
-      '<a href="' + safeUrl + '" ' +
-      'data-recommended-product-id="' + encodeURIComponent(recommendedProduct.name) + '" ' +
-      'style="display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit;">' +
-      imageHtml +
-      '<div>' +
-      '<div style="font-weight: 600;">' + safeName + '</div>' +
-      priceHtml +
-      '</div>' +
+    return (
+      '<div class="swiper-slide js-item-product item-product col-grid" style="height:auto;">' +
+      '<a href="' + safeUrl + '" class="item-link" style="display:block;text-decoration:none;color:inherit;">' +
+      '<div class="item-image" style="margin-bottom:8px;">' + imageHtml + '</div>' +
+      '<div class="js-item-name item-name" style="font-size:.85rem;line-height:1.25;margin-bottom:4px;">' + safeName + '</div>' +
+      (priceText ? '<div class="item-price" style="font-weight:600;">' + priceText + '</div>' : '') +
       '</a>' +
-      '</div>' +
-      '</div>';
+      '</div>'
+    );
+  }
 
+  function buildBlockHtml(products) {
+    var slides = products.map(buildSlideHtml).join('');
+    return (
+      '<div class="container-fluid position-relative" id="' + BLOCK_ID + '" style="margin:24px 0;">' +
+      '<div class="header-related">' +
+      '<h2 class="section-title section-title-products-home">Recomendados</h2>' +
+      '</div>' +
+      '<div class="swiper js-recomendados-swiper products-section section-products-related position-relative" style="overflow:hidden;">' +
+      '<div class="swiper-wrapper">' + slides + '</div>' +
+      '<div class="swiper-pagination js-recomendados-pagination" style="position:relative;margin-top:12px;"></div>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  function initSwiper() {
+    if (typeof window.Swiper === 'undefined') {
+      // Sem Swiper (tema mudou/nao carregou): o bloco ainda aparece como grid
+      // rolavel horizontalmente; nao e erro fatal.
+      return;
+    }
+    try {
+      // eslint-disable-next-line no-new
+      new window.Swiper('.js-recomendados-swiper', {
+        slidesPerView: 2,
+        spaceBetween: 12,
+        watchOverflow: true,
+        breakpoints: { 768: { slidesPerView: 4, spaceBetween: 16 } },
+        pagination: { el: '.js-recomendados-pagination', clickable: true },
+      });
+    } catch (e) {
+      /* init do carrossel nunca derruba o bloco */
+    }
+  }
+
+  function renderRecommendationBlock(products) {
+    if (!products || !products.length) return false;
+    if (document.getElementById(BLOCK_ID)) return true; // ja renderizado (idempotente)
+
+    var html = buildBlockHtml(products);
     var beforeEl = document.querySelector(ANCHOR_BEFORE_SELECTOR);
     var afterEl = document.querySelector(ANCHOR_AFTER_SELECTOR);
 
     if (beforeEl) {
-      // Insere como irmao, imediatamente antes de #product-description —
-      // exatamente a posicao documentada em 01-04-SUMMARY.md (D-03).
       beforeEl.insertAdjacentHTML('beforebegin', html);
-      return true;
-    }
-
-    if (afterEl) {
-      // Fallback: insere como irmao, imediatamente depois de #compre-junto-block,
-      // caso #product-description nao esteja presente no DOM no momento da
-      // execucao (ex: carregamento assincrono de outro bloco).
+    } else if (afterEl) {
       afterEl.insertAdjacentHTML('afterend', html);
-      return true;
+    } else {
+      return false;
     }
 
-    return false;
+    initSwiper();
+    return true;
   }
 
   // -------------------------------------------------------------------------
   // Orquestracao
   // -------------------------------------------------------------------------
-
   function init() {
     var productId = getCurrentProductId();
+    if (!productId) return; // nao e pagina de produto
 
-    if (!productId) {
-      // Nao estamos numa pagina de produto (ou o tema mudou a variavel global) —
-      // nao faz sentido tentar renderizar recomendacoes.
-      return;
-    }
-
-    // Cache TTL de 24h (D-50, FRNT-02/SC#4): consulta o cache ANTES de chamar
-    // fetchRecommendation. Em cache hit, renderiza a partir do cache e
-    // retorna cedo - zero chamada de rede nova nesta visita.
     var cached = getCachedRecommendation(window.sessionStorage, productId, Date.now());
     if (cached) {
-      if (cached.recommendedProductId && cached.recommendedProduct) {
-        var insertedFromCache = renderRecommendationBlock(cached.recommendedProduct);
-        if (!insertedFromCache) {
-          console.warn(
-            '[recomendados-alpha] Nao foi possivel encontrar ' +
-            ANCHOR_BEFORE_SELECTOR + ' nem ' + ANCHOR_AFTER_SELECTOR +
-            ' no DOM para ancorar o bloco de recomendacao (cache).'
-          );
-        }
-      }
-      return;
+      var cachedProducts = extractProducts(cached);
+      if (cachedProducts.length) renderRecommendationBlock(cachedProducts);
+      return; // cache hit: zero chamada de rede nova (FRNT-02/SC#4)
     }
 
     fetchRecommendation(productId)
       .then(function (data) {
         setCachedRecommendation(window.sessionStorage, productId, data, Date.now());
-
-        if (data && data.recommendedProductId && data.recommendedProduct) {
-          var inserted = renderRecommendationBlock(data.recommendedProduct);
+        var products = extractProducts(data);
+        if (products.length) {
+          var inserted = renderRecommendationBlock(products);
           if (!inserted) {
             console.warn(
-              '[recomendados-alpha] Nao foi possivel encontrar ' +
-              ANCHOR_BEFORE_SELECTOR + ' nem ' + ANCHOR_AFTER_SELECTOR +
-              ' no DOM para ancorar o bloco de recomendacao.'
+              '[recomendados-motor] Nao encontrei ' +
+                ANCHOR_BEFORE_SELECTOR + ' nem ' + ANCHOR_AFTER_SELECTOR + ' para ancorar o bloco.'
             );
           }
         }
       })
       .catch(function (err) {
-        console.warn('[recomendados-alpha] Falha ao buscar recomendacao:', err);
+        console.warn('[recomendados-motor] Falha ao buscar recomendacoes:', err);
       });
   }
 
-  // Guard de exportacao SOMENTE para teste (main.test.js): permite importar
-  // getCachedRecommendation/setCachedRecommendation sem jsdom nem executar o
-  // restante do arquivo (que depende de document/window reais). Em producao,
-  // dentro de uma tag <script> classica real no navegador, `module` nunca e
-  // declarado - `typeof module` avalia para 'undefined' com seguranca (nunca
-  // lanca ReferenceError) e este bloco nunca executa.
-  if (typeof module !== 'undefined' && module.exports) { module.exports = { getCachedRecommendation: getCachedRecommendation, setCachedRecommendation: setCachedRecommendation }; return; }
+  // Guard de exportacao SOMENTE para teste (main.test.js): permite importar as
+  // funcoes puras sem executar o restante (que depende de document/window reais).
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      getCachedRecommendation: getCachedRecommendation,
+      setCachedRecommendation: setCachedRecommendation,
+      extractProducts: extractProducts,
+      formatPrice: formatPrice,
+    };
+    return;
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
