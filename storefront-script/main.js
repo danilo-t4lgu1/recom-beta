@@ -145,25 +145,63 @@
   // nossos) e insere ESTE bloco na posicao D-03, com Swiper proprio.
   // Preço: exibe o preço ATUAL (promocional, quando houver) — igual à página do
   // produto — com o preço cheio riscado + flag de % quando em promoção (D-52).
+  // Estilos do bloco injetados UMA vez (classes + media queries). Preferido a
+  // estilos inline porque os refinamentos sao responsivos (desktop != mobile) e
+  // usam efeitos (glassmorphism) que inline nao cobre bem. Escopados por #BLOCK_ID.
+  var STYLE_ID = 'recomendados-motor-styles';
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var B = '#' + BLOCK_ID + ' ';
+    var css =
+      '#' + BLOCK_ID + '{margin:24px 0;}' +
+      B + '.recomendados-motor-header{display:block !important;text-align:center;margin-bottom:16px;}' +
+      B + '.rec-img{width:100%;height:auto;display:block;border-radius:4px;object-fit:cover;aspect-ratio:3/4;}' +
+      B + '.rec-name{font-size:1.14rem;line-height:1.3;margin:8px 0 4px;min-height:2.5em;}' +
+      B + '.rec-price{margin-top:5px;line-height:1.3;}' +
+      B + '.rec-old{text-decoration:line-through;color:#999;font-size:.94rem;margin-right:6px;}' +
+      B + '.rec-now{font-weight:700;font-size:1.15rem;}' +
+      B + '.rec-flag{display:inline-block;background:#1a1a1a;color:#fff;font-size:.88rem;font-weight:700;padding:2px 7px;border-radius:4px;margin-left:6px;vertical-align:middle;}' +
+      B + '.rec-sizes{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;}' +
+      // Chip com glassmorphism (~40%): fundo translucido + blur + borda sutil.
+      B + '.rec-chip{display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border:1px solid rgba(190,190,190,.4);border-radius:6px;font-size:13px;line-height:1.4;color:#222;background:rgba(255,255,255,.4);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}' +
+      // Indisponivel: risco diagonal PRETO + 20% mais transparente (opacity .8).
+      B + '.rec-chip.off{color:#888;opacity:.8;background-image:linear-gradient(to top right,transparent calc(50% - .8px),#1a1a1a calc(50% - .8px),#1a1a1a calc(50% + .8px),transparent calc(50% + .8px));}' +
+      // DESKTOP (>=768): bloco ~20% menor (nome/preco/chip), mas FLAG +30%.
+      '@media (min-width:768px){' +
+      B + '.rec-name{font-size:.92rem;}' +
+      B + '.rec-now{font-size:.92rem;}' +
+      B + '.rec-old{font-size:.75rem;}' +
+      B + '.rec-flag{font-size:1.14rem;padding:3px 9px;}' +
+      B + '.rec-chip{min-width:21px;font-size:10.5px;padding:2px 4px;}' +
+      '}' +
+      // MOBILE (<=767): grade de tamanho ~10% menor p/ caber XPP/34 numa linha.
+      '@media (max-width:767px){' +
+      B + '.rec-chip{min-width:23px;font-size:11.7px;padding:2px 4px;}' +
+      B + '.rec-sizes{gap:4px;}' +
+      '}';
+    var st = document.createElement('style');
+    st.id = STYLE_ID;
+    st.appendChild(document.createTextNode(css));
+    (document.head || document.documentElement).appendChild(st);
+  }
+
   function buildPriceHtml(product) {
     var current = escapeHtml(formatPrice(product.price));
     if (!current) return '';
     if (product.onSale && product.regularPrice) {
       var regular = escapeHtml(formatPrice(product.regularPrice));
       var flag = product.discountPercent
-        ? '<span style="display:inline-block;background:#1a1a1a;color:#fff;font-size:.88rem;font-weight:700;' +
-          'padding:2px 7px;border-radius:4px;margin-left:6px;vertical-align:middle;">-' +
-          product.discountPercent + '%</span>'
+        ? '<span class="rec-flag">-' + product.discountPercent + '%</span>'
         : '';
       return (
-        '<div class="item-price" style="margin-top:5px;line-height:1.3;">' +
-        '<span style="text-decoration:line-through;color:#999;font-size:.94rem;margin-right:6px;">' + regular + '</span>' +
-        '<span style="font-weight:700;font-size:1.15rem;">' + current + '</span>' +
+        '<div class="item-price rec-price">' +
+        '<span class="rec-old">' + regular + '</span>' +
+        '<span class="rec-now">' + current + '</span>' +
         flag +
         '</div>'
       );
     }
-    return '<div class="item-price" style="margin-top:5px;font-weight:700;font-size:1.15rem;">' + current + '</div>';
+    return '<div class="item-price rec-price"><span class="rec-now">' + current + '</span></div>';
   }
 
   // Grade de tamanhos: indicador sutil abaixo do preço. Tamanho disponível =
@@ -172,23 +210,13 @@
   // nativa da Nuvemshop para seleção de tamanho antes do carrinho).
   function buildSizesHtml(sizes) {
     if (!Array.isArray(sizes) || !sizes.length) return '';
-    var base =
-      'display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border:1px solid #e3e3e3;' +
-      'border-radius:3px;font-size:13px;line-height:1.4;';
     var chips = sizes
       .map(function (s) {
         var label = escapeHtml(s.size);
-        if (s.available) {
-          return '<span style="' + base + 'color:#222;">' + label + '</span>';
-        }
-        return (
-          '<span style="' + base + 'color:#bbb;border-color:#eee;' +
-          'background-image:linear-gradient(to top right, transparent calc(50% - 0.7px), #cc2b2b calc(50% - 0.7px), #cc2b2b calc(50% + 0.7px), transparent calc(50% + 0.7px));">' +
-          label + '</span>'
-        );
+        return '<span class="rec-chip' + (s.available ? '' : ' off') + '">' + label + '</span>';
       })
       .join('');
-    return '<div class="item-sizes" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;">' + chips + '</div>';
+    return '<div class="item-sizes rec-sizes">' + chips + '</div>';
   }
 
   function buildSlideHtml(product) {
@@ -197,15 +225,14 @@
     var safeImage = product.image ? escapeHtml(product.image) : null;
 
     var imageHtml = safeImage
-      ? '<img src="' + safeImage + '" alt="' + safeName + '" loading="lazy" ' +
-        'style="width:100%;height:auto;display:block;border-radius:4px;object-fit:cover;aspect-ratio:3/4;">'
+      ? '<img class="rec-img" src="' + safeImage + '" alt="' + safeName + '" loading="lazy">'
       : '';
 
     return (
       '<div class="swiper-slide js-item-product item-product col-grid" style="height:auto;">' +
       '<a href="' + safeUrl + '" class="item-link" style="display:block;text-decoration:none;color:inherit;">' +
       '<div class="item-image" style="margin-bottom:8px;">' + imageHtml + '</div>' +
-      '<div class="js-item-name item-name" style="font-size:1.14rem;line-height:1.3;margin-bottom:4px;min-height:2.5em;">' + safeName + '</div>' +
+      '<div class="js-item-name item-name rec-name">' + safeName + '</div>' +
       buildPriceHtml(product) +
       buildSizesHtml(product.sizes) +
       '</a>' +
@@ -251,7 +278,7 @@
         watchOverflow: true,
         grabCursor: true, // arrastar no desktop (segurar o clique) + toque no mobile
         loop: enableLoop,
-        breakpoints: { 768: { slidesPerView: 3.3, spaceBetween: 19 } }, // ~20% mais largo que 4
+        breakpoints: { 768: { slidesPerView: 4, spaceBetween: 16 } }, // desktop 20% menor (mais cards por linha)
         pagination: { el: '.js-recomendados-pagination', clickable: true },
       });
       // Autoplay de 3s por interval próprio (não depende do módulo Autoplay do
@@ -271,6 +298,7 @@
     if (!products || !products.length) return false;
     if (document.getElementById(BLOCK_ID)) return true; // ja renderizado (idempotente)
 
+    injectStyles();
     var html = buildBlockHtml(products);
     var beforeEl = document.querySelector(ANCHOR_BEFORE_SELECTOR);
     var afterEl = document.querySelector(ANCHOR_AFTER_SELECTOR);
