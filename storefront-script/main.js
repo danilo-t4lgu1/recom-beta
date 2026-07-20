@@ -151,19 +151,19 @@
     if (product.onSale && product.regularPrice) {
       var regular = escapeHtml(formatPrice(product.regularPrice));
       var flag = product.discountPercent
-        ? '<span style="display:inline-block;background:#1a1a1a;color:#fff;font-size:.68rem;font-weight:700;' +
-          'padding:1px 5px;border-radius:3px;margin-left:6px;vertical-align:middle;">-' +
+        ? '<span style="display:inline-block;background:#1a1a1a;color:#fff;font-size:.88rem;font-weight:700;' +
+          'padding:2px 7px;border-radius:4px;margin-left:6px;vertical-align:middle;">-' +
           product.discountPercent + '%</span>'
         : '';
       return (
-        '<div class="item-price" style="margin-top:4px;line-height:1.3;">' +
-        '<span style="text-decoration:line-through;color:#999;font-size:.78rem;margin-right:6px;">' + regular + '</span>' +
-        '<span style="font-weight:700;">' + current + '</span>' +
+        '<div class="item-price" style="margin-top:5px;line-height:1.3;">' +
+        '<span style="text-decoration:line-through;color:#999;font-size:.94rem;margin-right:6px;">' + regular + '</span>' +
+        '<span style="font-weight:700;font-size:1.15rem;">' + current + '</span>' +
         flag +
         '</div>'
       );
     }
-    return '<div class="item-price" style="margin-top:4px;font-weight:700;">' + current + '</div>';
+    return '<div class="item-price" style="margin-top:5px;font-weight:700;font-size:1.15rem;">' + current + '</div>';
   }
 
   // Grade de tamanhos: indicador sutil abaixo do preço. Tamanho disponível =
@@ -173,8 +173,8 @@
   function buildSizesHtml(sizes) {
     if (!Array.isArray(sizes) || !sizes.length) return '';
     var base =
-      'display:inline-block;min-width:22px;text-align:center;padding:1px 4px;border:1px solid #e3e3e3;' +
-      'border-radius:3px;font-size:11px;line-height:1.4;';
+      'display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border:1px solid #e3e3e3;' +
+      'border-radius:3px;font-size:13px;line-height:1.4;';
     var chips = sizes
       .map(function (s) {
         var label = escapeHtml(s.size);
@@ -188,7 +188,7 @@
         );
       })
       .join('');
-    return '<div class="item-sizes" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">' + chips + '</div>';
+    return '<div class="item-sizes" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;">' + chips + '</div>';
   }
 
   function buildSlideHtml(product) {
@@ -205,7 +205,7 @@
       '<div class="swiper-slide js-item-product item-product col-grid" style="height:auto;">' +
       '<a href="' + safeUrl + '" class="item-link" style="display:block;text-decoration:none;color:inherit;">' +
       '<div class="item-image" style="margin-bottom:8px;">' + imageHtml + '</div>' +
-      '<div class="js-item-name item-name" style="font-size:.95rem;line-height:1.3;margin-bottom:4px;min-height:2.5em;">' + safeName + '</div>' +
+      '<div class="js-item-name item-name" style="font-size:1.14rem;line-height:1.3;margin-bottom:4px;min-height:2.5em;">' + safeName + '</div>' +
       buildPriceHtml(product) +
       buildSizesHtml(product.sizes) +
       '</a>' +
@@ -221,9 +221,9 @@
       '<div class="container-fluid position-relative" id="' + BLOCK_ID + '" style="margin:24px 0;">' +
       '<div class="recomendados-motor-header" style="display:block !important;text-align:center;margin-bottom:16px;">' +
       '<h2 class="section-title section-title-products-home" ' +
-      'style="font-family:Arial,Helvetica,sans-serif;font-size:1.35rem;letter-spacing:.04em;margin:0 0 4px;">RECOMENDADOS</h2>' +
+      'style="font-family:Arial,Helvetica,sans-serif;font-size:1.6rem;font-weight:700;letter-spacing:.04em;margin:0 0 4px;">RECOMENDADOS</h2>' +
       '<a class="link-text" href="/produtos" ' +
-      'style="display:inline-block;font-size:.82rem;text-decoration:underline;color:#555;">Compre Agora</a>' +
+      'style="display:inline-block;font-size:.98rem;text-decoration:underline;color:#555;">Compre Agora</a>' +
       '</div>' +
       '<div class="swiper js-recomendados-swiper products-section section-products-related position-relative" style="overflow:hidden;">' +
       '<div class="swiper-wrapper">' + slides + '</div>' +
@@ -244,12 +244,12 @@
     var enableLoop = slideCount > perView;
     try {
       var sw = new window.Swiper('.js-recomendados-swiper', {
-        slidesPerView: 2,
-        spaceBetween: 12,
+        slidesPerView: 1.7, // ~20% mais largo que 2 (+ um "peek" que sinaliza swipe)
+        spaceBetween: 14,
         watchOverflow: true,
         grabCursor: true, // arrastar no desktop (segurar o clique) + toque no mobile
         loop: enableLoop,
-        breakpoints: { 768: { slidesPerView: 4, spaceBetween: 16 } },
+        breakpoints: { 768: { slidesPerView: 3.3, spaceBetween: 19 } }, // ~20% mais largo que 4
         pagination: { el: '.js-recomendados-pagination', clickable: true },
       });
       // Autoplay de 3s por interval próprio (não depende do módulo Autoplay do
