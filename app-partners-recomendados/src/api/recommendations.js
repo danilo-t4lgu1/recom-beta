@@ -33,22 +33,71 @@ export function parseRecommendedIds(rawValue) {
   return [String(parsed)];
 }
 
+// Localiza a posição do atributo "Tamanho" em product.attributes (mesma
+// convenção WR-06 da ingestão). Fallback para índice 1 se não achar.
+function findSizeIndex(attributes) {
+  if (!Array.isArray(attributes)) return 1;
+  const i = attributes.findIndex((a) => {
+    const n = (a && a.pt ? a.pt : '').trim().toLowerCase();
+    return n === 'tamanho' || n === 'size';
+  });
+  return i >= 0 ? i : 1;
+}
+
+// Estoque de uma variante: soma inventory_levels[].stock quando presente
+// (fonte correta, DATA-01), senão cai no campo v.stock.
+function variantStock(v) {
+  const inv = v && v.inventory_levels;
+  if (Array.isArray(inv) && inv.length) {
+    return inv.reduce((s, l) => s + (Number(l && l.stock) || 0), 0);
+  }
+  return Number(v && v.stock) || 0;
+}
+
 /**
- * Materializa os dados de exibição de um produto recomendado (url/name/image/price)
- * a partir da API pública. Nunca lança: se o produto foi excluído/indisponível,
- * o chamador filtra o `null` fora (um id morto não derruba o bloco inteiro).
+ * Materializa os dados de exibição de um produto recomendado a partir da API
+ * pública — agora com PREÇO ATUAL (promocional quando houver, para bater com a
+ * página real do produto), preço cheio para riscar, flag de promoção, e a GRADE
+ * DE TAMANHOS com disponibilidade por tamanho. Nunca lança: produto excluído/
+ * indisponível vira `null` e é filtrado pelo chamador.
  * @param {string} id
- * @returns {Promise<{ id: string, url: string, name: string, image: string|null, price: string|null } | null>}
+ * @returns {Promise<object|null>}
  */
 async function materializeProduct(id) {
   try {
     const product = await getProduct(id);
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const first = variants[0] || {};
+
+    // Preço: promotional_price é o preço ATUAL da vitrine quando presente; price
+    // é o cheio (para riscar). Bate com o que a página do produto exibe.
+    const regular = first.price != null ? Number(first.price) : null;
+    const promo = first.promotional_price != null ? Number(first.promotional_price) : null;
+    const current = promo != null ? promo : regular;
+    const onSale = promo != null && regular != null && promo < regular;
+
+    // Grade de tamanhos: agrega por valor de tamanho (attributes → 'Tamanho'),
+    // marcando disponível se QUALQUER variante daquele tamanho tem estoque > 0.
+    const sizeIdx = findSizeIndex(product.attributes);
+    const sizeMap = new Map();
+    for (const v of variants) {
+      const size = v && v.values && v.values[sizeIdx] ? v.values[sizeIdx].pt : null;
+      if (size == null) continue;
+      const available = variantStock(v) > 0;
+      sizeMap.set(size, (sizeMap.get(size) || false) || available);
+    }
+    const sizes = Array.from(sizeMap.entries()).map(([size, available]) => ({ size, available }));
+
     return {
       id: String(id),
       url: product.canonical_url,
       name: (product.name && product.name.pt) || String(id),
       image: (product.images && product.images[0] && product.images[0].src) || null,
-      price: (product.variants && product.variants[0] && product.variants[0].price) || null,
+      price: current != null ? String(current) : null,
+      regularPrice: onSale ? String(regular) : null,
+      onSale,
+      discountPercent: onSale ? Math.round((1 - promo / regular) * 100) : null,
+      sizes,
     };
   } catch {
     return null;
