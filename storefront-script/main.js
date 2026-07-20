@@ -128,9 +128,10 @@
 
   function formatPrice(price) {
     if (price == null || price === '') return '';
-    // A API devolve preco como string "349.90"; exibe no padrao BRL "R$ 349,90".
-    var normalized = String(price).replace('.', ',');
-    return 'R$ ' + normalized;
+    var n = Number(price);
+    if (isNaN(n)) return '';
+    // Sempre 2 casas no padrao BRL: 99.9 -> "R$ 99,90"; 289.9 -> "R$ 289,90".
+    return 'R$ ' + n.toFixed(2).replace('.', ',');
   }
 
   // -------------------------------------------------------------------------
@@ -142,11 +143,58 @@
   //   card:    .swiper-slide.js-item-product.item-product + .js-item-name.item-name
   // Mantem o bloco nativo oculto (ele mostra os relacionados do tema, nao os
   // nossos) e insere ESTE bloco na posicao D-03, com Swiper proprio.
+  // Preço: exibe o preço ATUAL (promocional, quando houver) — igual à página do
+  // produto — com o preço cheio riscado + flag de % quando em promoção (D-52).
+  function buildPriceHtml(product) {
+    var current = escapeHtml(formatPrice(product.price));
+    if (!current) return '';
+    if (product.onSale && product.regularPrice) {
+      var regular = escapeHtml(formatPrice(product.regularPrice));
+      var flag = product.discountPercent
+        ? '<span style="display:inline-block;background:#1a1a1a;color:#fff;font-size:.68rem;font-weight:700;' +
+          'padding:1px 5px;border-radius:3px;margin-left:6px;vertical-align:middle;">-' +
+          product.discountPercent + '%</span>'
+        : '';
+      return (
+        '<div class="item-price" style="margin-top:4px;line-height:1.3;">' +
+        '<span style="text-decoration:line-through;color:#999;font-size:.78rem;margin-right:6px;">' + regular + '</span>' +
+        '<span style="font-weight:700;">' + current + '</span>' +
+        flag +
+        '</div>'
+      );
+    }
+    return '<div class="item-price" style="margin-top:4px;font-weight:700;">' + current + '</div>';
+  }
+
+  // Grade de tamanhos: indicador sutil abaixo do preço. Tamanho disponível =
+  // legível; indisponível = cinza com risco diagonal (linear-gradient inline,
+  // sem depender de CSS externo). Somente indicador — sem add-to-cart (limitação
+  // nativa da Nuvemshop para seleção de tamanho antes do carrinho).
+  function buildSizesHtml(sizes) {
+    if (!Array.isArray(sizes) || !sizes.length) return '';
+    var base =
+      'display:inline-block;min-width:22px;text-align:center;padding:1px 4px;border:1px solid #e3e3e3;' +
+      'border-radius:3px;font-size:11px;line-height:1.4;';
+    var chips = sizes
+      .map(function (s) {
+        var label = escapeHtml(s.size);
+        if (s.available) {
+          return '<span style="' + base + 'color:#222;">' + label + '</span>';
+        }
+        return (
+          '<span style="' + base + 'color:#bbb;border-color:#eee;' +
+          'background-image:linear-gradient(to top right, transparent calc(50% - 0.7px), #cc2b2b calc(50% - 0.7px), #cc2b2b calc(50% + 0.7px), transparent calc(50% + 0.7px));">' +
+          label + '</span>'
+        );
+      })
+      .join('');
+    return '<div class="item-sizes" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">' + chips + '</div>';
+  }
+
   function buildSlideHtml(product) {
     var safeUrl = escapeHtml(product.url);
     var safeName = escapeHtml(product.name);
     var safeImage = product.image ? escapeHtml(product.image) : null;
-    var priceText = escapeHtml(formatPrice(product.price));
 
     var imageHtml = safeImage
       ? '<img src="' + safeImage + '" alt="' + safeName + '" loading="lazy" ' +
@@ -157,8 +205,9 @@
       '<div class="swiper-slide js-item-product item-product col-grid" style="height:auto;">' +
       '<a href="' + safeUrl + '" class="item-link" style="display:block;text-decoration:none;color:inherit;">' +
       '<div class="item-image" style="margin-bottom:8px;">' + imageHtml + '</div>' +
-      '<div class="js-item-name item-name" style="font-size:.85rem;line-height:1.25;margin-bottom:4px;">' + safeName + '</div>' +
-      (priceText ? '<div class="item-price" style="font-weight:600;">' + priceText + '</div>' : '') +
+      '<div class="js-item-name item-name" style="font-size:.95rem;line-height:1.3;margin-bottom:4px;min-height:2.5em;">' + safeName + '</div>' +
+      buildPriceHtml(product) +
+      buildSizesHtml(product.sizes) +
       '</a>' +
       '</div>'
     );
@@ -166,10 +215,15 @@
 
   function buildBlockHtml(products) {
     var slides = products.map(buildSlideHtml).join('');
+    // Header com 2 blocos de texto CENTRALIZADOS (reaplicando o layout nativo):
+    // "RECOMENDADOS" (maior, sans-serif) + "Compre Agora" (menor, sublinhado).
     return (
       '<div class="container-fluid position-relative" id="' + BLOCK_ID + '" style="margin:24px 0;">' +
-      '<div class="header-related">' +
-      '<h2 class="section-title section-title-products-home">Recomendados</h2>' +
+      '<div class="header-related" style="text-align:center;margin-bottom:16px;">' +
+      '<h2 class="section-title section-title-products-home" ' +
+      'style="font-family:Arial,Helvetica,sans-serif;font-size:1.35rem;letter-spacing:.04em;margin:0 0 4px;">RECOMENDADOS</h2>' +
+      '<a class="link-text" href="/produtos" ' +
+      'style="display:inline-block;font-size:.82rem;text-decoration:underline;color:#555;">Compre Agora</a>' +
       '</div>' +
       '<div class="swiper js-recomendados-swiper products-section section-products-related position-relative" style="overflow:hidden;">' +
       '<div class="swiper-wrapper">' + slides + '</div>' +
@@ -179,21 +233,33 @@
     );
   }
 
-  function initSwiper() {
+  function initSwiper(slideCount) {
     if (typeof window.Swiper === 'undefined') {
       // Sem Swiper (tema mudou/nao carregou): o bloco ainda aparece como grid
       // rolavel horizontalmente; nao e erro fatal.
       return;
     }
+    // Só faz sentido loop/autoplay quando há mais slides do que cabem na tela.
+    var perView = (window.innerWidth || 1024) >= 768 ? 4 : 2;
+    var enableLoop = slideCount > perView;
     try {
-      // eslint-disable-next-line no-new
-      new window.Swiper('.js-recomendados-swiper', {
+      var sw = new window.Swiper('.js-recomendados-swiper', {
         slidesPerView: 2,
         spaceBetween: 12,
         watchOverflow: true,
+        grabCursor: true, // arrastar no desktop (segurar o clique) + toque no mobile
+        loop: enableLoop,
         breakpoints: { 768: { slidesPerView: 4, spaceBetween: 16 } },
         pagination: { el: '.js-recomendados-pagination', clickable: true },
       });
+      // Autoplay de 3s por interval próprio (não depende do módulo Autoplay do
+      // build de Swiper do tema). disableOnInteraction implícito: se o usuário
+      // arrastar, o próximo tick só avança a partir da posição atual.
+      if (enableLoop) {
+        setInterval(function () {
+          try { sw.slideNext(400); } catch (e) { /* nunca derruba o bloco */ }
+        }, 3000);
+      }
     } catch (e) {
       /* init do carrossel nunca derruba o bloco */
     }
@@ -215,7 +281,7 @@
       return false;
     }
 
-    initSwiper();
+    initSwiper(products.length);
     return true;
   }
 
