@@ -31,6 +31,7 @@ function makeProduct({
   hasAvailableGrade = true,
   variants = [],
   productGroupCanonical = GROUP_LOOK_INTEIRO,
+  published = true,
 } = {}) {
   productCounter += 1;
   return {
@@ -41,6 +42,7 @@ function makeProduct({
     hasAvailableGrade,
     variants,
     productGroupCanonical,
+    published,
   };
 }
 
@@ -655,11 +657,56 @@ describe('recommendForProduct - grupo e mescla (D-27-D-30, D-34, D-35)', () => {
     expect(result.map((r) => r.productId)).toEqual(['11', '12', '25', '26', '21', '22', '23', '24']);
   });
 
-  it('suíte completa do arquivo permanece verde: 16 testes de regressão + 12 novos desta fase (Test 29)', () => {
-    // Meta-confirmação: esta suíte inteira (Tests 1-28), quando executada via
+  it('suíte completa do arquivo permanece verde: regressão + novos desta fase (Test 29)', () => {
+    // Meta-confirmação: esta suíte inteira, quando executada via
     // `npx vitest run src/recommendation/recommendation-engine.test.js`, deve
     // sair com código 0 — não há asserção adicional aqui, o próprio runner
     // vitest é a verificação (RULE-01/RULE-02, D-29/D-30/D-35).
     expect(true).toBe(true);
+  });
+});
+
+describe('recommendForProduct - visibilidade published (D-58)', () => {
+  it('candidato com published:false é excluído mesmo com cor/tecido/estoque/grupo coincidentes', () => {
+    const source = makeProduct({ productId: '1' });
+    const hidden = makeProduct({
+      productId: '2',
+      published: false,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    const visible = makeProduct({
+      productId: '3',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const result = recommendForProduct('1', [source, hidden, visible]);
+    expect(result.map((r) => r.productId)).toEqual(['3']);
+  });
+
+  it('fonte com published:false retorna [] sem lançar (não gera vitrine)', () => {
+    const source = makeProduct({ productId: '1', published: false });
+    const candidate = makeProduct({
+      productId: '2',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    expect(() => recommendForProduct('1', [source, candidate])).not.toThrow();
+    expect(recommendForProduct('1', [source, candidate])).toEqual([]);
+  });
+
+  it('published:null NÃO é tratado como oculto — candidato pré-migração continua elegível (A6/Pitfall 2)', () => {
+    const source = makeProduct({ productId: '1', published: null });
+    const preMigration = makeProduct({
+      productId: '2',
+      published: null,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    const undefinedPublished = makeProduct({
+      productId: '3',
+      published: undefined,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 3 })],
+    });
+
+    const result = recommendForProduct('1', [source, preMigration, undefinedPublished]);
+    expect(result.map((r) => r.productId).sort()).toEqual(['2', '3']);
   });
 });

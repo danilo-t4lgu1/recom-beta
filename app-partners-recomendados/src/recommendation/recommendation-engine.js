@@ -69,6 +69,7 @@
  * @property {string|null} fabricTagCanonical - NULL => produto fora do bloco mesmo-grupo (D-15); bloco cruzado nunca exige (D-28)
  * @property {string|null} productGroupCanonical - 'Look Inteiro' | 'Partes de Cima' | 'Partes de Baixo' | null (D-26); já resolvido pela ingestão
  * @property {boolean} hasAvailableGrade - resultado D-04 persistido na ingestão
+ * @property {boolean} published - flag de visibilidade da API persistido na ingestão (D-58); só `=== false` é oculto, `null`/`undefined` (pré-migração) nunca
  * @property {Array<{variantId: string, sizeValue: string|null, stockTotal: number}>} variants
  */
 
@@ -141,7 +142,9 @@ function normalizeMatchValue(value) {
  *
  * Tecido NUNCA exclui (D-55/D-57): tecido ausente ou diferente continua
  * elegível; a diferença de qualidade de match vira PESO (ver `candidateWeight`),
- * não filtro. A cor, ao contrário, permanece sempre obrigatória.
+ * não filtro. A cor, ao contrário, permanece sempre obrigatória. Candidato oculto
+ * (`published === false`, D-58) nunca é recomendado — a comparação é estritamente
+ * `=== false`, `null`/`undefined` (pré-migração) nunca conta como oculto.
  * @param {CatalogProductEntry} source
  * @param {CatalogProductEntry} candidate
  * @param {string|null} targetGroup
@@ -151,6 +154,7 @@ function isEligibleCandidateInGroup(source, candidate, targetGroup) {
   if (!candidate) return false;
   if (String(candidate.productId) === String(source.productId)) return false;
   if (!candidate.hasAvailableGrade) return false;
+  if (candidate.published === false) return false;
   if (candidate.colorValue == null) return false;
   if (candidate.productGroupCanonical !== targetGroup) return false;
 
@@ -388,6 +392,12 @@ export function recommendForProduct(
 
   if (!source) return [];
   if (source.colorValue == null) return [];
+
+  // Visibilidade da fonte (D-58): produto-fonte oculto não gera vitrine — link
+  // levaria a 404. Mesma disciplina fail-closed da guarda de grupo abaixo, com a
+  // comparação estritamente `=== false` (Pitfall 2/A6): `published` valendo
+  // `null`/`undefined` (fonte pré-migração) NUNCA conta como oculto.
+  if (source.published === false) return [];
 
   // Fail-closed (T-03.1-02): grupo-fonte nulo/desconhecido nunca é elegível
   // por padrão. Sem esta guarda, dois produtos com `productGroupCanonical:
