@@ -27,12 +27,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findMetafield, updateMetafield, deleteMetafield } from '../src/nuvemshop-client/client.js';
+import {
+  findMetafield,
+  updateMetafield,
+  deleteMetafield,
+  createMetafield,
+} from '../src/nuvemshop-client/client.js';
 
 vi.mock('../src/nuvemshop-client/client.js', () => ({
   findMetafield: vi.fn(),
   updateMetafield: vi.fn(),
   deleteMetafield: vi.fn(),
+  createMetafield: vi.fn(),
 }));
 
 let tempDir;
@@ -196,6 +202,93 @@ describe('performRollback', () => {
     const rows = store.listWriteLog();
     expect(rows).toHaveLength(1);
     expect(rows[0].triggeredBy).toBe('manual');
+  });
+
+  it('Test 7: rollback duplo — Metafield já deletado (findMetafield null) e restoredValue não-nulo -> RECRIA via createMetafield, NUNCA update/delete, não lança (CR-01, D-65)', async () => {
+    const store = await import('../src/db/catalog-store.js');
+    const { performRollback } = await import('./rollback.js');
+    const runId = seedProduct(store, 'prod-d');
+
+    // Estado após um 1º rollback que DELETOU o Metafield: a última linha success
+    // registra writtenValue=null (o delete) e previousValue=o valor a restaurar.
+    store.insertWriteLog({
+      productId: 'prod-d',
+      runId,
+      metafieldId: null,
+      previousValue: 'valor-a-restaurar',
+      writtenValue: null,
+      triggeredBy: 'rollback',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T11:00:00Z',
+    });
+
+    // Metafield não existe mais na loja (foi deletado) — findMetafield retorna null.
+    findMetafield.mockResolvedValue(null);
+    createMetafield.mockResolvedValue({ id: 'mf-novo', value: 'valor-a-restaurar' });
+
+    const result = await performRollback({ productId: 'prod-d' });
+
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: 'prod-d',
+      value: 'valor-a-restaurar',
+    });
+    expect(updateMetafield).not.toHaveBeenCalled();
+    expect(deleteMetafield).not.toHaveBeenCalled();
+    expect(result).toEqual({ id: 'mf-novo', value: 'valor-a-restaurar' });
+
+    const rows = store.listWriteLog();
+    const rollbackRows = rows.filter((r) => r.triggeredBy === 'rollback');
+    expect(rollbackRows).toHaveLength(2);
+    // A nova linha usa o id do Metafield recriado — nunca dereferencia existing.id nulo.
+    const recreated = rollbackRows.find((r) => r.metafieldId === 'mf-novo');
+    expect(recreated).toMatchObject({
+      productId: 'prod-d',
+      metafieldId: 'mf-novo',
+      previousValue: null,
+      writtenValue: 'valor-a-restaurar',
+      status: 'success',
+    });
+  });
+
+  it('Test 8: no-op — Metafield ausente (findMetafield null) e restoredValue null -> nenhuma chamada de rede, linha rollback com metafieldId null (CR-01, D-65)', async () => {
+    const store = await import('../src/db/catalog-store.js');
+    const { performRollback } = await import('./rollback.js');
+    const runId = seedProduct(store, 'prod-e');
+
+    // Última escrita success: previousValue null (nada a restaurar) e writtenValue null.
+    store.insertWriteLog({
+      productId: 'prod-e',
+      runId,
+      metafieldId: null,
+      previousValue: null,
+      writtenValue: null,
+      triggeredBy: 'rollback',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T11:00:00Z',
+    });
+
+    findMetafield.mockResolvedValue(null);
+
+    const result = await performRollback({ productId: 'prod-e' });
+
+    expect(createMetafield).not.toHaveBeenCalled();
+    expect(updateMetafield).not.toHaveBeenCalled();
+    expect(deleteMetafield).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ noop: true });
+
+    const rows = store.listWriteLog();
+    const rollbackRows = rows.filter((r) => r.triggeredBy === 'rollback');
+    expect(rollbackRows).toHaveLength(2);
+    const noopRow = rollbackRows.find((r) => r.metafieldId === null && r.writtenAt !== '2026-07-16T11:00:00Z');
+    expect(noopRow).toMatchObject({
+      productId: 'prod-e',
+      metafieldId: null,
+      previousValue: null,
+      writtenValue: null,
+      status: 'success',
+    });
   });
 });
 

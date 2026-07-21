@@ -17,7 +17,12 @@
 
 import { pathToFileURL } from 'node:url';
 import { getLastSuccessfulWriteLog, insertWriteLog } from '../src/db/catalog-store.js';
-import { findMetafield, updateMetafield, deleteMetafield } from '../src/nuvemshop-client/client.js';
+import {
+  findMetafield,
+  updateMetafield,
+  deleteMetafield,
+  createMetafield,
+} from '../src/nuvemshop-client/client.js';
 
 /**
  * Erro tipado lançado quando o valor atual do Metafield (lido ao vivo) diverge do
@@ -41,10 +46,13 @@ export class RollbackConflictError extends Error {
  * exatamente com o `writtenValue` daquela escrita (D-38, comparação estrita ANTES de
  * qualquer efeito). Quando `previousValue` é `null` (o Metafield não existia antes da
  * escrita original), usa `deleteMetafield` em vez de `updateMetafield` com valor
- * vazio. Toda restauração bem-sucedida insere uma linha NOVA em `write_log` com
- * `triggeredBy: 'rollback'` (D-44).
+ * vazio. Se o Metafield não existir mais na loja (`findMetafield` → null, ex.: um
+ * rollback anterior já o deletou), NÃO dereferencia `existing.id` (CR-01, D-65):
+ * recria via `createMetafield` quando há valor a restaurar, ou registra um no-op
+ * quando não há. Toda restauração bem-sucedida insere uma linha NOVA em `write_log`
+ * com `triggeredBy: 'rollback'` (D-44).
  * @param {{ productId: string }} params
- * @returns {Promise<object>} resultado de `updateMetafield`/`deleteMetafield`
+ * @returns {Promise<object>} resultado de `updateMetafield`/`deleteMetafield`/`createMetafield` ou `{ noop: true }`
  * @throws {Error} se não houver nenhuma escrita real registrada para o produto
  * @throws {RollbackConflictError} se o valor atual divergir do esperado
  */
@@ -62,15 +70,32 @@ export async function performRollback({ productId }) {
   }
 
   const restoredValue = lastWrite.previousValue;
-  const result =
-    restoredValue == null
-      ? await deleteMetafield({ id: existing.id })
-      : await updateMetafield({ id: existing.id, value: restoredValue });
+
+  // CR-01 (D-65): o Metafield pode não existir mais na loja — um rollback anterior
+  // já o deletou. Antes desta guarda, `existing.id` era dereferenciado cru em
+  // update/deleteMetafield, lançando TypeError num 2º rollback consecutivo. Agora:
+  //  - existing == null && restoredValue == null → no-op (nada a restaurar, já ausente);
+  //  - existing == null && restoredValue != null → RECRIA via createMetafield
+  //    (createMetafield, não updateMetafield, que exigiria um id inexistente);
+  //  - existing != null → caminho original (delete se nada a restaurar, senão update).
+  let result;
+  if (existing == null) {
+    result =
+      restoredValue == null
+        ? { noop: true }
+        : await createMetafield({ ownerId: productId, value: restoredValue });
+  } else if (restoredValue == null) {
+    result = await deleteMetafield({ id: existing.id });
+  } else {
+    result = await updateMetafield({ id: existing.id, value: restoredValue });
+  }
 
   insertWriteLog({
     productId,
     runId: lastWrite.runId,
-    metafieldId: existing.id,
+    // Nunca dereferencia `existing.id` cru: usa o id do Metafield recriado quando
+    // aplicável, ou null no caso no-op (CR-01).
+    metafieldId: existing ? existing.id : (result && result.id) || null,
     previousValue: currentValue,
     writtenValue: restoredValue,
     triggeredBy: 'rollback',
