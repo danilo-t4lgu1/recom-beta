@@ -608,3 +608,227 @@ describe('getSuccessfulRunForToday / seedPendingApprovalQueue / checkpointAndClo
     // checkpointAndCloseDb em catalog-store.js: close() duas vezes é no-op).
   });
 });
+
+describe('coluna published tri-estado + migração idempotente (Fase 07, D-58/A6)', () => {
+  /**
+   * Semeia um run success com N snapshots. Cada entry de `snapshotSpecs` é um objeto
+   * parcial de snapshot; campos obrigatórios ausentes recebem defaults realistas.
+   * `published` só é incluído no objeto de snapshot quando a chave existe no spec —
+   * ausência do campo prova o caso NULL/pré-migração (A6).
+   * @param {object} store módulo catalog-store.js já importado
+   * @param {Array<{ productId: string, published?: number }>} snapshotSpecs
+   * @returns {number} runId
+   */
+  function seedRunWithSnapshots(store, snapshotSpecs) {
+    const runId = store.startIngestionRun({ categoryId: '666', categoryName: 'Vestidos' });
+    const products = [];
+    const variants = [];
+    const snapshots = [];
+    for (const spec of snapshotSpecs) {
+      const { productId } = spec;
+      products.push({ id: productId, name: `Produto ${productId}`, handle: productId, canonicalUrl: `https://x/${productId}` });
+      variants.push({ id: `${productId}-v1`, productId, sku: 'SKU', colorValue: 'Preto', sizeValue: 'M', stockTotal: 5 });
+      const snapshot = {
+        productId,
+        hasAvailableGrade: 1,
+        sizesInStockCount: 3,
+        fabricTagRaw: 'algodao',
+        fabricTagCanonical: 'Algodão',
+        colorValue: 'Preto',
+        categoryRaw: 'Vestidos',
+        productGroupCanonical: 'Look Inteiro',
+        snapshotAt: new Date().toISOString(),
+      };
+      // Só define `published` quando o spec traz a chave — ausência = NULL (A6).
+      if ('published' in spec) snapshot.published = spec.published;
+      snapshots.push(snapshot);
+    }
+    store.persistIngestionBatch({ runId, records: { products, variants, snapshots } });
+    store.finishIngestionRun({ runId, status: 'success', productsRead: snapshotSpecs.length });
+    return runId;
+  }
+
+  it('published=1 → true e published=0 → false em getLatestSnapshotProducts() (Test 23)', async () => {
+    const store = await import('./catalog-store.js');
+
+    seedRunWithSnapshots(store, [
+      { productId: 'pub-visivel', published: 1 },
+      { productId: 'pub-oculto', published: 0 },
+    ]);
+
+    const rows = store.getLatestSnapshotProducts();
+    const visivel = rows.find((r) => r.productId === 'pub-visivel');
+    const oculto = rows.find((r) => r.productId === 'pub-oculto');
+    expect(visivel.published).toBe(true);
+    expect(oculto.published).toBe(false);
+  });
+
+  it('snapshot com published NULL (não informado) retorna published: null, nunca false (Test 24, A6)', async () => {
+    const store = await import('./catalog-store.js');
+
+    seedRunWithSnapshots(store, [{ productId: 'pub-desconhecido' }]);
+
+    const rows = store.getLatestSnapshotProducts();
+    const found = rows.find((r) => r.productId === 'pub-desconhecido');
+    expect(found.published).toBeNull();
+    expect(found.published).not.toBe(false);
+  });
+
+  it('migração de published/category_counts sobre um catalog.db pré-existente sem as colunas NÃO lança e é idempotente ao reabrir (Test 25, Pitfall 2)', async () => {
+    const dbPath = join(tempDir, 'catalog.db');
+    createLegacyDb(dbPath);
+
+    const store1 = await import('./catalog-store.js');
+    expect(() => store1.getLatestSnapshotProducts()).not.toThrow();
+    store1.closeDbForTests();
+
+    // Reabre contra o MESMO banco já migrado: o guard PRAGMA table_info torna o
+    // ALTER TABLE um no-op, sem lançar (idempotência).
+    vi.resetModules();
+    const store2 = await import('./catalog-store.js');
+    expect(() => store2.getLatestSnapshotProducts()).not.toThrow();
+
+    const check = new Database(dbPath);
+    const snapCols = check.prepare('PRAGMA table_info(catalog_snapshots)').all().map((c) => c.name);
+    const runCols = check.prepare('PRAGMA table_info(ingestion_runs)').all().map((c) => c.name);
+    check.close();
+    expect(snapCols).toContain('published');
+    expect(runCols).toContain('category_counts');
+    // store2 permanece aberto para o afterEach compartilhado fechar.
+  });
+});
+
+describe('baseline de conjunto (disjuntor) + resumo do último run (Fase 07, D-63/D-66)', () => {
+  /**
+   * Grava um produto real em `products` (write_log.product_id é FK NOT NULL) e
+   * devolve o runId — mesmo padrão dos describes de write_log/Fase 6 acima.
+   * @param {object} store
+   * @param {string} productId
+   * @returns {number} runId
+   */
+  function seedProduct(store, productId) {
+    const runId = store.startIngestionRun({ categoryId: '777', categoryName: 'Vestidos' });
+    store.persistIngestionBatch({
+      runId,
+      records: {
+        products: [{ id: productId, name: 'Produto Teste', handle: productId, canonicalUrl: `https://x/${productId}` }],
+      },
+    });
+    return runId;
+  }
+
+  it('getLastWrittenValuesForAllProducts() devolve APENAS o array da linha success mais recente por produto (Test 26, D-63)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'disj-a');
+
+    store.insertWriteLog({
+      productId: 'disj-a',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: JSON.stringify(['1', '2']),
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'disj-a',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: JSON.stringify(['1', '2']),
+      writtenValue: JSON.stringify(['3', '4', '5']),
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T12:00:00Z',
+    });
+
+    const map = store.getLastWrittenValuesForAllProducts();
+    expect(map instanceof Map).toBe(true);
+    expect(map.get('disj-a')).toEqual(['3', '4', '5']);
+  });
+
+  it('uma linha failed mais recente NÃO substitui o valor success no Map (Test 27, D-63)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'disj-b');
+
+    store.insertWriteLog({
+      productId: 'disj-b',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: JSON.stringify(['10', '20']),
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'disj-b',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: JSON.stringify(['10', '20']),
+      writtenValue: JSON.stringify(['99']),
+      triggeredBy: 'manual',
+      status: 'failed',
+      errorMessage: 'timeout',
+      writtenAt: '2026-07-16T11:00:00Z',
+    });
+
+    const map = store.getLastWrittenValuesForAllProducts();
+    expect(map.get('disj-b')).toEqual(['10', '20']);
+  });
+
+  it('written_value nulo/inválido vira [] sem lançar (Test 28)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'disj-c');
+
+    store.insertWriteLog({
+      productId: 'disj-c',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: null,
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-07-16T10:00:00Z',
+    });
+
+    let map;
+    expect(() => { map = store.getLastWrittenValuesForAllProducts(); }).not.toThrow();
+    expect(map.get('disj-c')).toEqual([]);
+  });
+
+  it('getLastSuccessfulIngestionRunSummary() devolve productsRead e categoryCounts desserializado do último run success (Test 29, D-66)', async () => {
+    const store = await import('./catalog-store.js');
+
+    const runId = store.startIngestionRun({ categoryId: '888', categoryName: 'Blusas, Calças' });
+    store.finishIngestionRun({
+      runId,
+      status: 'success',
+      productsRead: 42,
+      categoryCounts: { Blusas: 30, 'Calças': 12 },
+    });
+
+    const summary = store.getLastSuccessfulIngestionRunSummary();
+    expect(summary.runId).toBe(runId);
+    expect(summary.productsRead).toBe(42);
+    expect(summary.categoryCounts).toEqual({ Blusas: 30, 'Calças': 12 });
+  });
+
+  it('getLastSuccessfulIngestionRunSummary() devolve categoryCounts {} quando a coluna é nula (run pré-D-66) e null quando não há run success (Test 30)', async () => {
+    const store = await import('./catalog-store.js');
+
+    expect(store.getLastSuccessfulIngestionRunSummary()).toBeNull();
+
+    const runId = store.startIngestionRun({ categoryId: '999', categoryName: 'Vestidos' });
+    store.finishIngestionRun({ runId, status: 'success', productsRead: 5 });
+
+    const summary = store.getLastSuccessfulIngestionRunSummary();
+    expect(summary.runId).toBe(runId);
+    expect(summary.productsRead).toBe(5);
+    expect(summary.categoryCounts).toEqual({});
+  });
+});

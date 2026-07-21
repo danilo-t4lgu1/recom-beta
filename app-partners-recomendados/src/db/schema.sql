@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   category_id TEXT NOT NULL,
   category_name TEXT NOT NULL,
   products_read INTEGER,
+  category_counts TEXT,         -- JSON { [categoria]: contagem bruta } por-categoria ANTES do dedup (Defesa 1, D-66); bancos antigos recebem migração idempotente em catalog-store.js
   status TEXT NOT NULL DEFAULT 'running' -- running | success | failed
 );
 
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS catalog_snapshots (
   color_value TEXT,
   category_raw TEXT,             -- nome bruto da categoria, ex: "Blusas" (D-26)
   product_group_canonical TEXT,  -- 'Look Inteiro' | 'Partes de Cima' | 'Partes de Baixo' | NULL (D-26)
+  published INTEGER,             -- 0/1 visibilidade do produto na loja (D-58); NULL = pré-migração/desconhecido (nunca coagir p/ oculto, A6); bancos antigos recebem migração idempotente em catalog-store.js
   snapshot_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_product ON catalog_snapshots(product_id, snapshot_at);

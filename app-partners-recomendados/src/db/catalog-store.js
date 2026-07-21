@@ -42,6 +42,23 @@ if (!hasGroupColumn) {
   db.exec('ALTER TABLE catalog_snapshots ADD COLUMN product_group_canonical TEXT');
 }
 
+// Fase 07 (D-58/A6): flag de visibilidade `published` em catalog_snapshots. Mesma
+// disciplina de migração idempotente acima — bancos já com runs (ex: data/catalog.db
+// real, 4 runs) ganham a coluna sem perder dados; linhas antigas ficam `published =
+// NULL` (pré-migração), NUNCA `0`, para o motor não tratá-las como ocultas (Pitfall 2).
+const hasPublishedColumn = catalogSnapshotColumns.some((c) => c.name === 'published');
+if (!hasPublishedColumn) {
+  db.exec('ALTER TABLE catalog_snapshots ADD COLUMN published INTEGER');
+}
+
+// Fase 07 (D-66): contagem por-categoria (JSON) em ingestion_runs para a Defesa 1
+// de integridade do snapshot. Migração idempotente independente da de published.
+const ingestionRunColumns = db.prepare('PRAGMA table_info(ingestion_runs)').all();
+const hasCategoryCountsColumn = ingestionRunColumns.some((c) => c.name === 'category_counts');
+if (!hasCategoryCountsColumn) {
+  db.exec('ALTER TABLE ingestion_runs ADD COLUMN category_counts TEXT');
+}
+
 const insertProduct = db.prepare(
   `INSERT INTO products (id, name, handle, canonical_url, last_seen_run_id)
    VALUES (@id, @name, @handle, @canonicalUrl, @runId)
@@ -61,10 +78,10 @@ const insertSnapshot = db.prepare(
   `INSERT INTO catalog_snapshots
      (run_id, product_id, has_available_grade, sizes_in_stock_count,
       fabric_tag_raw, fabric_tag_canonical, color_value, category_raw,
-      product_group_canonical, snapshot_at)
+      product_group_canonical, published, snapshot_at)
    VALUES (@runId, @productId, @hasAvailableGrade, @sizesInStockCount,
       @fabricTagRaw, @fabricTagCanonical, @colorValue, @categoryRaw,
-      @productGroupCanonical, @snapshotAt)`
+      @productGroupCanonical, @published, @snapshotAt)`
 );
 
 const insertFabricAudit = db.prepare(
@@ -86,7 +103,8 @@ const insertIngestionRun = db.prepare(
 );
 
 const updateIngestionRun = db.prepare(
-  `UPDATE ingestion_runs SET finished_at = @finishedAt, status = @status, products_read = @productsRead
+  `UPDATE ingestion_runs SET finished_at = @finishedAt, status = @status,
+     products_read = @productsRead, category_counts = @categoryCounts
    WHERE id = @runId`
 );
 
@@ -113,7 +131,7 @@ const selectSuccessfulRunForTodayStmt = db.prepare(
 const selectSnapshotsForRun = db.prepare(
   `SELECT s.product_id AS product_id, s.fabric_tag_canonical AS fabric_tag_canonical,
      s.has_available_grade AS has_available_grade, s.product_group_canonical AS product_group_canonical,
-     p.name AS name
+     s.published AS published, p.name AS name
    FROM catalog_snapshots s
    JOIN products p ON p.id = s.product_id
    WHERE s.run_id = @runId
@@ -196,6 +214,30 @@ const selectAllWriteLogStmt = db.prepare(
   `SELECT * FROM write_log ORDER BY written_at DESC`
 );
 
+// Fase 07 (D-63): baseline de CONJUNTO por produto para o disjuntor — a linha
+// `status = 'success'` mais recente (maior `written_at`) de cada `product_id`. O
+// filtro de status vive DENTRO da subquery de agregação, então uma linha `failed`
+// mais recente que a última `success` do mesmo produto NUNCA a substitui (T-07-06).
+// Nunca usa `recommendation_baseline` (singular/legado): a fonte é o `written_value`
+// (array JSON completo realmente gravado na loja).
+const selectLastWrittenValuesStmt = db.prepare(
+  `SELECT w.product_id AS product_id, w.written_value AS written_value
+   FROM write_log w
+   WHERE w.status = 'success'
+     AND w.written_at = (
+       SELECT MAX(w2.written_at) FROM write_log w2
+       WHERE w2.product_id = w.product_id AND w2.status = 'success'
+     )`
+);
+
+// Fase 07 (D-66): resumo do último run success para a Defesa 1 (banda de total vs.
+// run anterior). Distinto de `selectLatestSuccessfulRun` (só o id) — traz também
+// products_read e category_counts (JSON por-categoria).
+const selectLatestSuccessfulRunSummaryStmt = db.prepare(
+  `SELECT id, products_read, category_counts
+   FROM ingestion_runs WHERE status = 'success' ORDER BY id DESC LIMIT 1`
+);
+
 /**
  * Lê o snapshot completo do último run de ingestão com status 'success' e o
  * materializa no shape `CatalogProductEntry` consumido produto a produto por
@@ -233,6 +275,12 @@ const selectAllWriteLogStmt = db.prepare(
  * tabela para auditoria/histórico mas não é exposta neste shape (mesmo padrão de
  * `fabric_tag_raw`, que também não aparece em `CatalogProductEntry`).
  *
+ * `published` (D-58/A6) é materializado como TRI-ESTADO: `true` quando a coluna for
+ * `1`, `false` quando `0`, e `null` quando a coluna for `NULL` (produto pré-migração,
+ * ainda não re-ingerido). O motor (Plano 07-01) trata SOMENTE `=== false` como oculto;
+ * `null` NUNCA é coagido para `false`, senão o catálogo inteiro sumiria antes da 1ª
+ * re-ingestão que popula o flag (Pitfall 2).
+ *
  * @returns {Array<{
  *   productId: string,
  *   name: string|null,
@@ -240,6 +288,7 @@ const selectAllWriteLogStmt = db.prepare(
  *   fabricTagCanonical: string|null,
  *   productGroupCanonical: string|null,
  *   hasAvailableGrade: boolean,
+ *   published: boolean|null,
  *   variants: Array<{ variantId: string, sizeValue: string|null, stockTotal: number }>
  * }>}
  */
@@ -279,6 +328,8 @@ export function getLatestSnapshotProducts() {
       fabricTagCanonical: row.fabric_tag_canonical,
       productGroupCanonical: row.product_group_canonical,
       hasAvailableGrade: row.has_available_grade === 1,
+      // Tri-estado D-58/A6: null (pré-migração) preservado, nunca coagido p/ false.
+      published: row.published == null ? null : row.published === 1,
       variants: variantsByProduct.get(productId) || [],
     };
   });
@@ -492,6 +543,58 @@ export function listWriteLog() {
 }
 
 /**
+ * Base do DISJUNTOR (D-63): devolve, por produto, o CONJUNTO completo de ids que foi
+ * de fato gravado na última escrita bem-sucedida — a fonte correta de "baseline" para
+ * medir churn de conjunto (não `recommendation_baseline`, que guarda só um id
+ * singular/legado, ver Anti-Pattern do 07-RESEARCH.md). Só a linha `status='success'`
+ * mais recente por `product_id` conta; linhas `failed` posteriores nunca a substituem
+ * (T-07-06). `written_value` nulo ou JSON inválido vira `[]` sem lançar (defensivo —
+ * o disjuntor nunca deve quebrar por um dado malformado no histórico).
+ * @returns {Map<string, string[]>} productId → array de ids realmente gravados.
+ */
+export function getLastWrittenValuesForAllProducts() {
+  const rows = selectLastWrittenValuesStmt.all();
+  const map = new Map();
+  for (const row of rows) {
+    let values = [];
+    if (row.written_value != null) {
+      try {
+        const parsed = JSON.parse(row.written_value);
+        values = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        values = [];
+      }
+    }
+    map.set(String(row.product_id), values);
+  }
+  return map;
+}
+
+/**
+ * Resumo do último run de ingestão com `status='success'` (D-66), consumido pela
+ * Defesa 1 de integridade (Plano 07-05) para comparar o total lido hoje contra a
+ * banda do run anterior. `categoryCounts` é desserializado do JSON persistido em
+ * `ingestion_runs.category_counts` — objeto vazio `{}` quando a coluna é nula (run
+ * pré-D-66). Retorna `null` quando ainda não existe nenhum run success (mesmo padrão
+ * de `getLatestSuccessfulRunId`), nunca lança.
+ * @returns {{ runId: number, productsRead: number|null, categoryCounts: Record<string, number> }|null}
+ */
+export function getLastSuccessfulIngestionRunSummary() {
+  const row = selectLatestSuccessfulRunSummaryStmt.get();
+  if (!row) return null;
+  let categoryCounts = {};
+  if (row.category_counts != null) {
+    try {
+      const parsed = JSON.parse(row.category_counts);
+      categoryCounts = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      categoryCounts = {};
+    }
+  }
+  return { runId: row.id, productsRead: row.products_read, categoryCounts };
+}
+
+/**
  * Abre uma nova execução de ingestão, registrando-a como 'running'. Deve sempre ser
  * fechada posteriormente via `finishIngestionRun` (sucesso ou falha), nunca deixada
  * presa em 'running' silenciosamente.
@@ -543,7 +646,9 @@ export function persistIngestionBatch({ runId, records }) {
       insertVariant.run({ ...variant, runId });
     }
     for (const snapshot of snapshots) {
-      insertSnapshot.run({ ...snapshot, runId });
+      // D-58/A6: `published` ausente vira NULL (pré-migração/desconhecido), nunca 0 —
+      // preserva a retrocompatibilidade de callers/testes que não informam o flag.
+      insertSnapshot.run({ ...snapshot, published: snapshot.published ?? null, runId });
     }
     for (const fabricAudit of fabricAudits) {
       insertFabricAudit.run({ ...fabricAudit, runId });
@@ -557,17 +662,21 @@ export function persistIngestionBatch({ runId, records }) {
 }
 
 /**
- * Fecha uma execução de ingestão com o status final (success | failed) e a
- * contagem real de produtos lidos.
- * @param {{ runId: number, status: 'success'|'failed', productsRead: number }} params
+ * Fecha uma execução de ingestão com o status final (success | failed), a contagem
+ * real de produtos lidos e, opcionalmente, a contagem por-categoria (D-66) para a
+ * Defesa 1 de integridade do snapshot (Plano 07-05). `categoryCounts` ausente/nulo é
+ * persistido como `NULL` (retrocompatível com todos os callers pré-D-66).
+ * @param {{ runId: number, status: 'success'|'failed', productsRead: number,
+ *   categoryCounts?: Record<string, number>|null }} params
  * @returns {void}
  */
-export function finishIngestionRun({ runId, status, productsRead }) {
+export function finishIngestionRun({ runId, status, productsRead, categoryCounts }) {
   updateIngestionRun.run({
     runId,
     finishedAt: new Date().toISOString(),
     status,
     productsRead,
+    categoryCounts: categoryCounts != null ? JSON.stringify(categoryCounts) : null,
   });
 }
 
