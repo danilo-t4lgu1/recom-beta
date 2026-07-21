@@ -1,21 +1,33 @@
-// Motor de recomendação determinístico (RULE-01/RULE-02, D-13, D-15, D-16, D-17,
-// D-18, D-26 a D-31, D-34, D-35).
+// Motor de recomendação determinístico (RULE-01/RULE-02, D-13, D-17,
+// D-18, D-26 a D-31, D-34, D-35, D-55, D-56, D-57, D-58).
 //
 // Módulo de domínio puro, no formato de `stock-availability.js`: funções nomeadas,
 // sem estado, sem I/O. Não importa nenhum outro módulo do projeto — o motor
-// consome o flag `hasAvailableGrade` já persistido pela ingestão (fonte única da
-// regra D-04, calculada por `hasAvailableGrade()` de `stock-availability.js` sobre
-// o shape da API); reimplementar essa regra aqui duplicaria lógica e quebraria a
-// pureza estrutural (zero imports) exigida por RULE-02/Success Criteria #4.
+// consome os flags já persistidos pela ingestão (`hasAvailableGrade` da regra
+// D-04, calculada por `hasAvailableGrade()` de `stock-availability.js`; e
+// `published` da visibilidade da API, D-58); reimplementar essas regras aqui
+// duplicaria lógica e quebraria a pureza estrutural (zero imports) exigida por
+// RULE-02/Success Criteria #4.
 //
-// Elegibilidade estrita (D-15): tanto a fonte quanto os candidatos precisam ter
-// `fabricTagCanonical` não-nulo QUANDO o bloco exige tecido (mesmo-grupo). NÃO
-// existe modo alternativo de elegibilidade por cor+estoque quando o tecido está
-// ausente no bloco mesmo-grupo (D-16) — isso foi avaliado e rejeitado como regra
-// permanente de negócio; é só um workaround manual do usuário fora deste motor,
-// enquanto a planilha de tecidos não é importada. Downstream agents NÃO devem
-// adicionar esse fallback ao bloco mesmo-grupo. O bloco cruzado (D-28) é a única
-// exceção deliberada: tecido nunca é considerado ali, por desenho (D-26 a D-30).
+// Modelo de 2 pesos (D-55/D-56/D-57): o PISO de elegibilidade é Estoque + Cor +
+// mesmo grupo — o tecido NUNCA exclui um candidato. A qualidade do match é
+// expressa por um PESO: peso 1 quando o bloco considera tecido E fonte e
+// candidato têm `fabricTagCanonical` não-nulo e o tecido bate (Estoque+Cor+Tecido,
+// E+C+T); peso 2 em qualquer outro caso elegível — tecido ausente em um lado,
+// tecido diferente, ou bloco cruzado onde tecido nunca é considerado (Estoque+Cor,
+// E+C). A partição por peso é a chave de ordenação PRIMÁRIA (D-56): peso 1 sempre
+// fica acima de peso 2 dentro do mesmo pool, mesmo com estoque total menor; a
+// cascata D-13 ordena DENTRO de cada peso. Isto substitui o override de
+// 2026-07-17 (que excluía tecido diferente): tecido diferente passa a ser elegível
+// como peso 2, elevando a cobertura sem perder o ranking por qualidade de match.
+// A cor permanece sempre obrigatória; o bloco cruzado (D-28) nunca considera
+// tecido, por desenho (D-26 a D-30).
+//
+// Visibilidade (D-58): candidato com `published === false` nunca é recomendado
+// (link levaria a 404); produto-fonte com `published === false` não gera vitrine
+// (`recommendForProduct` retorna []). A comparação é estritamente `=== false` —
+// `published` valendo `null`/`undefined` (produto pré-migração, ainda não
+// re-ingerido) NUNCA conta como oculto, para não zerar o catálogo (D-58/Pitfall 2).
 //
 // Desempate (D-13/D-14): cascata de estoque em 3 níveis, implementada como três
 // comparadores nomeados — `compareByTotalStock` (estoque total → nível 1),
@@ -121,52 +133,61 @@ function normalizeMatchValue(value) {
 
 /**
  * Verifica se `candidate` é elegível como recomendação para `source` DENTRO de
- * um grupo-alvo específico (`targetGroup`). Regras, na ordem: candidato nulo,
- * auto-exclusão (mesmo productId), grade de estoque indisponível, cor nula, e
- * grupo do candidato diferente de `targetGroup` (D-26 a D-30 — isto sozinho já
- * barra candidatos de grupo `null`/diferente, incluindo Look Inteiro contra
- * outro grupo, D-27).
+ * um grupo-alvo específico (`targetGroup`). Piso de elegibilidade (D-57):
+ * candidato não-nulo, sem auto-exclusão (mesmo productId), grade de estoque
+ * disponível, cor não-nula e cor batendo (após normalização), e mesmo grupo
+ * (`targetGroup` — isto sozinho já barra candidatos de grupo `null`/diferente,
+ * incluindo Look Inteiro contra outro grupo, D-27).
  *
- * Tecido — OVERRIDE do usuário em 2026-07-17 (reverte D-15/D-16, "elegibilidade
- * estrita sem fallback"): tecido passa a ser OPCIONAL DOS DOIS LADOS. Quando
- * `considerFabric` é truthy (bloco mesmo-grupo), o tecido só FILTRA quando
- * AMBOS — fonte e candidato — têm tecido canônico preenchido (aí exige bater
- * após normalização); se qualquer lado estiver sem tecido, cai para cor+estoque
- * (peça sem tecido deixa de ser inelegível). Quando `considerFabric` é falsy
- * (bloco cruzado, D-28), o tecido NUNCA é considerado. Em ambos os casos a cor
- * sempre precisa bater.
+ * Tecido NUNCA exclui (D-55/D-57): tecido ausente ou diferente continua
+ * elegível; a diferença de qualidade de match vira PESO (ver `candidateWeight`),
+ * não filtro. A cor, ao contrário, permanece sempre obrigatória.
  * @param {CatalogProductEntry} source
  * @param {CatalogProductEntry} candidate
  * @param {string|null} targetGroup
- * @param {{ considerFabric: boolean }} options
  * @returns {boolean}
  */
-function isEligibleCandidateInGroup(source, candidate, targetGroup, { considerFabric }) {
+function isEligibleCandidateInGroup(source, candidate, targetGroup) {
   if (!candidate) return false;
   if (String(candidate.productId) === String(source.productId)) return false;
   if (!candidate.hasAvailableGrade) return false;
   if (candidate.colorValue == null) return false;
   if (candidate.productGroupCanonical !== targetGroup) return false;
 
-  if (considerFabric) {
-    const bothHaveFabric =
-      source.fabricTagCanonical != null && candidate.fabricTagCanonical != null;
-    if (bothHaveFabric) {
-      const sameFabric =
-        normalizeMatchValue(candidate.fabricTagCanonical) ===
-        normalizeMatchValue(source.fabricTagCanonical);
-      if (!sameFabric) return false;
-    }
-  }
-
   return normalizeMatchValue(candidate.colorValue) === normalizeMatchValue(source.colorValue);
 }
 
 /**
- * Monta e ordena (cascata D-13, `compareRecommendations`) o pool de
- * candidatos elegíveis de um grupo-alvo específico dentro do `catalog`.
- * Função interna, não exportada — não corta em `maxRecommendations`, quem
- * chama decide o corte/composição de cota (`composeGroupQuota`).
+ * Peso do candidato no ranking (D-55/D-56): peso 1 (Estoque+Cor+Tecido) quando o
+ * bloco considera tecido (`considerFabric` truthy, bloco mesmo-grupo) E fonte e
+ * candidato têm `fabricTagCanonical` não-nulo E o tecido bate após normalização;
+ * peso 2 (Estoque+Cor) em qualquer outro caso elegível — tecido ausente em um
+ * lado, tecido diferente, ou bloco cruzado (`considerFabric` falsy, D-28, onde
+ * tecido nunca é considerado). Nunca decide elegibilidade (isso é do piso E+C em
+ * `isEligibleCandidateInGroup`); só a ORDEM (peso 1 acima de peso 2, D-56).
+ * @param {CatalogProductEntry} source
+ * @param {CatalogProductEntry} candidate
+ * @param {boolean} considerFabric
+ * @returns {1|2}
+ */
+function candidateWeight(source, candidate, considerFabric) {
+  if (!considerFabric) return 2;
+  const bothHaveFabric =
+    source.fabricTagCanonical != null && candidate.fabricTagCanonical != null;
+  const sameFabric =
+    bothHaveFabric &&
+    normalizeMatchValue(candidate.fabricTagCanonical) ===
+      normalizeMatchValue(source.fabricTagCanonical);
+  return sameFabric ? 1 : 2;
+}
+
+/**
+ * Monta e ordena o pool de candidatos elegíveis de um grupo-alvo específico
+ * dentro do `catalog`. Ordenação em duas chaves (D-56): PRIMÁRIA por peso
+ * ascendente (`candidateWeight` — peso 1 antes de peso 2); SECUNDÁRIA, dentro de
+ * cada peso, pela cascata D-13 (`compareRecommendations`). Função interna, não
+ * exportada — não corta em `maxRecommendations`, quem chama decide o
+ * corte/composição de cota (`composeGroupQuota`).
  * @param {CatalogProductEntry} source
  * @param {CatalogProductEntry[]} catalog
  * @param {string|null} targetGroup
@@ -175,9 +196,13 @@ function isEligibleCandidateInGroup(source, candidate, targetGroup, { considerFa
  */
 function buildSortedPool(source, catalog, targetGroup, { considerFabric }) {
   return catalog
-    .filter((candidate) => isEligibleCandidateInGroup(source, candidate, targetGroup, { considerFabric }))
-    .map(buildRecommendation)
-    .sort(compareRecommendations);
+    .filter((candidate) => isEligibleCandidateInGroup(source, candidate, targetGroup))
+    .map((candidate) => ({
+      rec: buildRecommendation(candidate),
+      weight: candidateWeight(source, candidate, considerFabric),
+    }))
+    .sort((a, b) => a.weight - b.weight || compareRecommendations(a.rec, b.rec))
+    .map((entry) => entry.rec);
 }
 
 /**
@@ -327,22 +352,22 @@ function compareRecommendations(a, b) {
 
 /**
  * Motor de recomendação determinístico (RULE-01/RULE-02, D-26 a D-31, D-34,
- * D-35). Recebe um `productId` e o array de produtos do snapshot (D-17,
- * chamada produto a produto) e devolve até `maxRecommendations` recomendações
- * (D-18) elegíveis. Look Inteiro (grupo auto-contido, D-27) exige mesma cor +
- * grade de estoque disponível + mesmo grupo, na ordem da cascata D-13
- * (`compareRecommendations`); o tecido é OPCIONAL dos dois lados (override
- * 2026-07-17, reverte D-15/D-16): só filtra quando fonte E candidato têm tecido
- * canônico preenchido, senão vale só cor+estoque.
+ * D-35, D-55, D-56, D-57). Recebe um `productId` e o array de produtos do
+ * snapshot (D-17, chamada produto a produto) e devolve até `maxRecommendations`
+ * recomendações (D-18) elegíveis. Piso de elegibilidade (D-57): mesma cor +
+ * grade de estoque disponível + mesmo grupo — o tecido NUNCA exclui. A qualidade
+ * do match vira PESO (D-55/D-56): peso 1 (mesmo tecido, E+C+T) sempre acima de
+ * peso 2 (tecido ausente/diferente, E+C) dentro de cada pool, com a cascata D-13
+ * ordenando DENTRO de cada peso. Look Inteiro é auto-contido (D-27).
  * Partes de Cima e Partes de Baixo mesclam entre si (D-28): até
- * `GROUP_QUOTA_PER_SIDE` do mesmo grupo (cor+estoque, tecido opcional dos dois
- * lados) + até `GROUP_QUOTA_PER_SIDE` do grupo cruzado (cor+estoque, tecido
- * nunca considerado), com backfill simétrico (D-29) quando um lado tem menos
- * elegíveis que o outro. Entrada malformada, produto-fonte ausente, fonte sem
- * cor, ou fonte com `productGroupCanonical` nulo/desconhecido (fail-closed,
- * T-03.1-02) retornam `[]`, nunca lança (convenção T-02-06). Fonte sem tecido
- * canônico agora gera recomendações em qualquer grupo (não é mais inelegível,
- * override 2026-07-17). Função pura:
+ * `GROUP_QUOTA_PER_SIDE` do mesmo grupo (E+C, tecido vira peso) + até
+ * `GROUP_QUOTA_PER_SIDE` do grupo cruzado (E+C, tecido nunca considerado, tudo
+ * peso 2), com backfill simétrico (D-29) quando um lado tem menos elegíveis que
+ * o outro. Entrada malformada, produto-fonte ausente, fonte sem cor, ou fonte
+ * com `productGroupCanonical` nulo/desconhecido (fail-closed, T-03.1-02) retornam
+ * `[]`, nunca lança (convenção T-02-06). Fonte sem tecido canônico gera
+ * recomendações em qualquer grupo por cor+estoque (todos os candidatos viram
+ * peso 2). Função pura:
  * ordena cópias dos arrays de candidatos (nunca muta `catalogProducts` nem os
  * objetos de entrada), sem relógio/aleatoriedade/rede/importações. O corte em
  * `maxRecommendations` acontece APÓS a ordenação completa de cada bloco
@@ -375,20 +400,17 @@ export function recommendForProduct(
 
   if (!crossGroup) {
     // Look Inteiro (ou qualquer grupo não-mesclável): auto-contido (D-27).
-    // Tecido opcional dos dois lados (override 2026-07-17, reverte D-15/D-16):
-    // fonte sem tecido NÃO é mais inelegível — cai para cor+estoque dentro do
-    // grupo; fonte com tecido casa por tecido apenas contra candidatos que
-    // também têm tecido (regra em isEligibleCandidateInGroup).
+    // Piso E+C (D-57): tecido nunca exclui; mesmo tecido vira peso 1 e o resto
+    // peso 2 (D-55/D-56), ordenados dentro do pool por peso e depois cascata D-13.
     return buildSortedPool(source, catalog, sourceGroup, { considerFabric: true }).slice(
       0,
       maxRecommendations
     );
   }
 
-  // Partes de Cima/Baixo: mescla com cota 4+4 (D-28). Bloco mesmo-grupo com
-  // tecido opcional dos dois lados (override 2026-07-17); bloco cruzado nunca
-  // considera tecido (D-28). Fonte sem tecido gera AMBOS os blocos por
-  // cor+estoque.
+  // Partes de Cima/Baixo: mescla com cota 4+4 (D-28). Bloco mesmo-grupo usa peso
+  // (mesmo tecido = peso 1, resto peso 2, D-55/D-56); bloco cruzado nunca
+  // considera tecido (D-28, tudo peso 2). Ambos os blocos partem do piso E+C.
   const samePool = buildSortedPool(source, catalog, sourceGroup, { considerFabric: true });
   const crossPool = buildSortedPool(source, catalog, crossGroup, { considerFabric: false });
 

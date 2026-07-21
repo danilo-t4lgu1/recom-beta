@@ -45,13 +45,14 @@ function makeProduct({
 }
 
 describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)', () => {
-  it('retorna exatamente os candidatos elegíveis: mesma cor + mesmo tecido + grade disponível (Test 1)', () => {
+  it('inclui todo candidato com mesma cor + grade disponível; tecido diferente entra como peso 2 (Test 1 / D-55/D-57)', () => {
     const source = makeProduct({ productId: '1', colorValue: 'Preto', fabricTagCanonical: 'Viscose' });
     const eligible1 = makeProduct({ productId: '2', colorValue: 'Preto', fabricTagCanonical: 'Viscose' });
     const eligible2 = makeProduct({ productId: '3', colorValue: 'Preto', fabricTagCanonical: 'Viscose' });
     const eligible3 = makeProduct({ productId: '4', colorValue: 'Preto', fabricTagCanonical: 'Viscose' });
     const wrongColor = makeProduct({ productId: '5', colorValue: 'Vermelho', fabricTagCanonical: 'Viscose' });
-    const wrongFabric = makeProduct({ productId: '6', colorValue: 'Preto', fabricTagCanonical: 'Algodao' });
+    // D-55/D-57: tecido diferente NÃO exclui mais — vira candidato de peso 2.
+    const diffFabricWeight2 = makeProduct({ productId: '6', colorValue: 'Preto', fabricTagCanonical: 'Algodao' });
     const noStock = makeProduct({
       productId: '7',
       colorValue: 'Preto',
@@ -59,11 +60,31 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
       hasAvailableGrade: false,
     });
 
-    const catalog = [source, eligible1, eligible2, eligible3, wrongColor, wrongFabric, noStock];
+    const catalog = [source, eligible1, eligible2, eligible3, wrongColor, diffFabricWeight2, noStock];
     const result = recommendForProduct('1', catalog);
 
-    expect(result.map((r) => r.productId).sort()).toEqual(['2', '3', '4']);
+    // Cor errada (id5) e sem grade (id7) continuam excluídos; tecido diferente (id6) entra como peso 2.
+    expect(result.map((r) => r.productId).sort()).toEqual(['2', '3', '4', '6']);
     expect(result.length).toBeLessThanOrEqual(MAX_RECOMMENDATIONS);
+  });
+
+  it('invariante D-56: peso 1 (E+C+T) fica acima de peso 2 (E+C) mesmo com estoque total menor (Test 1.1)', () => {
+    const source = makeProduct({ productId: '1', colorValue: 'Preto', fabricTagCanonical: 'Viscose' });
+    const weight1 = makeProduct({
+      productId: '2',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+    const weight2 = makeProduct({
+      productId: '3',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 100 })],
+    });
+    // Entrada com o peso 2 primeiro prova que a ordem não depende da entrada.
+    const result = recommendForProduct('1', [source, weight2, weight1]);
+    expect(result.map((r) => r.productId)).toEqual(['2', '3']);
   });
 
   it('exclui candidato com hasAvailableGrade falso mesmo com mesma cor e tecido (Test 2)', () => {
@@ -167,13 +188,14 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
     ]);
   });
 
-  it('tecido opcional dos dois lados: casa mesmo-tecido, aceita candidato sem tecido, mas rejeita tecido diferente quando ambos têm (override 2026-07-17)', () => {
+  it('modelo de 2 pesos: mesmo-tecido é peso 1; tecido ausente e tecido diferente entram como peso 2 (D-55/D-56/D-57)', () => {
     const source = makeProduct({ productId: '1', fabricTagCanonical: 'Viscose' });
-    const sameFabric = makeProduct({ productId: '2', fabricTagCanonical: 'Viscose' }); // ambos têm, igual -> ok
-    const noFabric = makeProduct({ productId: '3', fabricTagCanonical: null }); // um lado sem -> ok (cor+estoque)
-    const diffFabric = makeProduct({ productId: '4', fabricTagCanonical: 'Algodao' }); // ambos têm, diferente -> excluído
+    const sameFabric = makeProduct({ productId: '2', fabricTagCanonical: 'Viscose' }); // peso 1 (E+C+T)
+    const noFabric = makeProduct({ productId: '3', fabricTagCanonical: null }); // peso 2 (um lado sem tecido)
+    const diffFabric = makeProduct({ productId: '4', fabricTagCanonical: 'Algodao' }); // peso 2 (antes excluído, D-57)
     const result = recommendForProduct('1', [source, sameFabric, noFabric, diffFabric]);
-    expect(result.map((r) => r.productId).sort()).toEqual(['2', '3']);
+    // peso 1 (id2) acima; empate de peso 2 (id3, id4) desempatado por productId asc -> id4 por último.
+    expect(result.map((r) => r.productId)).toEqual(['2', '3', '4']);
   });
 
   it('duas chamadas consecutivas com o mesmo fixture retornam resultado deeply-equal (Test 9 / RULE-02)', () => {
