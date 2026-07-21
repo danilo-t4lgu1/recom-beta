@@ -44,8 +44,8 @@ const STORE_CATEGORIES = [
  * Monta um produto mínimo e realista no shape da API pública Nuvemshop, com grade de
  * estoque disponível (>=3 tamanhos com estoque > 0, D-04) por padrão.
  */
-function makeProduct({ id, categoryName, colorValue = 'Preto', tags = '' }) {
-  return {
+function makeProduct({ id, categoryName, colorValue = 'Preto', tags = '', published }) {
+  const product = {
     id,
     name: { pt: `Produto ${id}` },
     handle: { pt: `produto-${id}` },
@@ -59,6 +59,11 @@ function makeProduct({ id, categoryName, colorValue = 'Preto', tags = '' }) {
     ],
     categories: [{ id: 999, name: { pt: categoryName } }],
   };
+  // Só inclui `published` quando explicitamente informado — a ausência do campo
+  // simula um produto cujo payload da API não trouxe visibilidade, exercitando a
+  // coerção defensiva `=== true ? 1 : 0` (D-58) do ingest-catalog.js.
+  if (published !== undefined) product.published = published;
+  return product;
 }
 
 let tempDir;
@@ -197,6 +202,65 @@ describe('ingest-catalog.js', () => {
     const rows = getLatestSnapshotProducts();
     const sharedRows = rows.filter((row) => row.productId === 'shared-1');
     expect(sharedRows.length).toBe(1);
+  });
+});
+
+describe('published + categoryCounts na ingestão (Fase 07, D-58/D-66)', () => {
+  it('produto published:false é ingerido (não descartado) e persistido com published=0 (Test 6, D-58/Pitfall 5)', async () => {
+    const oculto = makeProduct({ id: 'oculto-1', categoryName: 'Blusas', published: false });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '200') return { products: [oculto], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runIngestion } = await import('./ingest-catalog.js');
+    const result = await runIngestion({ categoryName: 'Blusas' });
+    expect(result.status).toBe('success');
+    expect(result.productsRead).toBe(1); // ingerido, nunca filtrado por ?published=true
+
+    const { getLatestSnapshotProducts } = await import('../db/catalog-store.js');
+    const rows = getLatestSnapshotProducts();
+    const found = rows.find((r) => r.productId === 'oculto-1');
+    expect(found).toBeDefined();
+    expect(found.published).toBe(false);
+  });
+
+  it('published:true persiste published=1 (true); produto sem o campo persiste 0 (false, coerção defensiva) (Test 7, D-58)', async () => {
+    const visivel = makeProduct({ id: 'visivel-1', categoryName: 'Blusas', published: true });
+    const semCampo = makeProduct({ id: 'sem-campo-1', categoryName: 'Blusas' }); // sem `published`
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '200') return { products: [visivel, semCampo], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runIngestion } = await import('./ingest-catalog.js');
+    await runIngestion({ categoryName: 'Blusas' });
+
+    const { getLatestSnapshotProducts } = await import('../db/catalog-store.js');
+    const rows = getLatestSnapshotProducts();
+    expect(rows.find((r) => r.productId === 'visivel-1').published).toBe(true);
+    expect(rows.find((r) => r.productId === 'sem-campo-1').published).toBe(false);
+  });
+
+  it('runIngestion com duas categorias retorna categoryCounts com 1 chave por categoria e a contagem correta (Test 8, D-66)', async () => {
+    const blusa1 = makeProduct({ id: 'b1', categoryName: 'Blusas', published: true });
+    const blusa2 = makeProduct({ id: 'b2', categoryName: 'Blusas', published: true });
+    const calca1 = makeProduct({ id: 'c1', categoryName: 'Calças', published: true });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '200') return { products: [blusa1, blusa2], hasNextPage: false };
+      if (String(categoryId) === '300') return { products: [calca1], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runIngestion } = await import('./ingest-catalog.js');
+    const result = await runIngestion({ categoryNames: ['Blusas', 'Calças'] });
+
+    expect(result.categoryCounts).toEqual({ Blusas: 2, 'Calças': 1 });
+
+    // E persistido em ingestion_runs.category_counts (Defesa 1, D-66).
+    const { getLastSuccessfulIngestionRunSummary } = await import('../db/catalog-store.js');
+    const summary = getLastSuccessfulIngestionRunSummary();
+    expect(summary.categoryCounts).toEqual({ Blusas: 2, 'Calças': 1 });
   });
 });
 

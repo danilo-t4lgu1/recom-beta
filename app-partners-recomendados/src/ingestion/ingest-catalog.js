@@ -163,7 +163,8 @@ async function readRecommendationBaseline(productId, limiter) {
  * @param {{ categoryName?: string, categoryNames?: string[] }} [params]
  * @returns {Promise<{ runId: number, productsRead: number, status: 'success',
  *   availableCount: number, distinctTagCount: number, unmappedTagCount: number,
- *   unmappedCategoryCount: number, baselineNonNullCount: number }>}
+ *   unmappedCategoryCount: number, baselineNonNullCount: number,
+ *   categoryCounts: Record<string, number> }>}
  */
 export async function runIngestion({ categoryName = 'Vestidos', categoryNames } = {}) {
   const limiter = new AdaptiveRateLimiter();
@@ -181,8 +182,12 @@ export async function runIngestion({ categoryName = 'Vestidos', categoryNames } 
   // sobreposição entre categorias mescladas, mesmo que D-26 confirme que não é
   // esperado hoje (cada produto pertence a uma única categoria).
   const productsById = new Map();
+  // D-66/Defesa 1: contagem BRUTA por categoria (antes do merge/dedup, per Open
+  // Question 1) — base da banda de integridade do snapshot que o Plano 07-05 consome.
+  const categoryCounts = {};
   for (const resolvedCategory of resolvedCategories) {
     const categoryProducts = await listAllProductsInCategory(resolvedCategory.id, limiter);
+    categoryCounts[resolvedCategory.name] = categoryProducts.length;
     for (const product of categoryProducts) {
       productsById.set(String(product.id), product);
     }
@@ -281,6 +286,11 @@ export async function runIngestion({ categoryName = 'Vestidos', categoryNames } 
         colorValue: snapshotColorValue,
         categoryRaw,
         productGroupCanonical,
+        // D-58/Pitfall 5: ingere TODOS (sem filtro ?published=true na query) e
+        // persiste o flag; coerção defensiva idêntica a hasAvailableGrade — só
+        // `=== true` é 1, qualquer outro valor (false/ausente/null) vira 0. O motor
+        // (Plano 07-01) decide oculto tanto para candidato quanto para fonte.
+        published: product.published === true ? 1 : 0,
         snapshotAt,
       });
 
@@ -318,7 +328,7 @@ export async function runIngestion({ categoryName = 'Vestidos', categoryNames } 
       records: { products, variants, snapshots, fabricAudits, recommendationBaselines },
     });
 
-    finishIngestionRun({ runId, status: 'success', productsRead: allProducts.length });
+    finishIngestionRun({ runId, status: 'success', productsRead: allProducts.length, categoryCounts });
 
     return {
       runId,
@@ -329,6 +339,7 @@ export async function runIngestion({ categoryName = 'Vestidos', categoryNames } 
       unmappedTagCount: unmapped.size,
       unmappedCategoryCount: unmappedCategories.size,
       baselineNonNullCount,
+      categoryCounts,
     };
   } catch (error) {
     // WR-03: allProducts já está disponível antes do try — registra a contagem real
