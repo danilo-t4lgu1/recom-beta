@@ -55,6 +55,28 @@ import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
  * @param {{ categoryNames?: string[] }} [params]
  * @returns {Promise<{ skipped: boolean, runId: number|null, queueLength: number, ingestionResult?: object }>}
  */
+/**
+ * Kill switch operacional do regime diário de escrita automática (D-62). Espelha
+ * `resolveMinSizesInStock` (ingest-catalog.js): decide se as escritas deste run
+ * são REAIS ou dry-run, lido de variáveis de ambiente mapeadas pelo workflow do
+ * GitHub Actions — nunca depende da máquina do usuário.
+ *
+ * Precedência (A1/D-62): `WRITE_OVERRIDE` (input `write` do `workflow_dispatch`,
+ * usado no 1º rollout supervisionado D-64) tem prioridade — `'true'` liga,
+ * `'false'` desliga mesmo com o regime persistente ligado. Ausente/vazio, cai em
+ * `WRITE_ENABLED` (repository variable persistente): só `'true'` liga. QUALQUER
+ * outro caso (ambos ausentes, valores inesperados como `'1'`/`'yes'`) resolve para
+ * `false` — ausência de configuração explícita SEMPRE significa dry-run seguro,
+ * nunca escrita acidental na loja de produção.
+ * @returns {boolean} true => grava de verdade; false => dry-run (loga, não escreve)
+ */
+export function resolveWriteEnabled() {
+  const override = process.env.WRITE_OVERRIDE;
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+  return process.env.WRITE_ENABLED === 'true';
+}
+
 export async function runDailyJob({ categoryNames } = {}) {
   const existingRunId = getSuccessfulRunForToday();
 

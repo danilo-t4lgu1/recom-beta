@@ -22,6 +22,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listCategories, listProducts, getMetafields } from '../src/nuvemshop-client/client.js';
+import { resolveWriteEnabled } from './run-daily-job.js';
 
 vi.mock('../src/nuvemshop-client/client.js', () => ({
   listCategories: vi.fn(),
@@ -160,5 +161,64 @@ describe('runDailyJob', () => {
     const entry = changes.find((c) => c.productId === 'produto-sem-tecido');
     expect(entry).toBeDefined();
     expect(entry.status).toBe('pending');
+  });
+});
+
+// Kill switch (D-62): resolveWriteEnabled é uma função PURA — lê process.env no
+// momento da chamada e decide se o regime diário grava de verdade. Default
+// SEGURO: ausência de configuração => false (dry-run), nunca escrita acidental
+// (A1/D-62). WRITE_OVERRIDE (input do workflow_dispatch, 1º rollout supervisionado
+// D-64) tem prioridade sobre WRITE_ENABLED (repository variable persistente).
+describe('resolveWriteEnabled (kill switch D-62)', () => {
+  const originalOverride = process.env.WRITE_OVERRIDE;
+  const originalEnabled = process.env.WRITE_ENABLED;
+
+  const restore = (key, value) => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
+
+  beforeEach(() => {
+    delete process.env.WRITE_OVERRIDE;
+    delete process.env.WRITE_ENABLED;
+  });
+
+  afterEach(() => {
+    restore('WRITE_OVERRIDE', originalOverride);
+    restore('WRITE_ENABLED', originalEnabled);
+  });
+
+  it("WRITE_OVERRIDE='true' => true (input do dispatch tem prioridade)", () => {
+    process.env.WRITE_OVERRIDE = 'true';
+    process.env.WRITE_ENABLED = 'false';
+    expect(resolveWriteEnabled()).toBe(true);
+  });
+
+  it("WRITE_OVERRIDE='false' => false mesmo com WRITE_ENABLED='true' (override manual desliga)", () => {
+    process.env.WRITE_OVERRIDE = 'false';
+    process.env.WRITE_ENABLED = 'true';
+    expect(resolveWriteEnabled()).toBe(false);
+  });
+
+  it('ambos ausentes => false (default seguro = dry-run, A1/D-62)', () => {
+    expect(resolveWriteEnabled()).toBe(false);
+  });
+
+  it("WRITE_ENABLED='true' e WRITE_OVERRIDE ausente => true (regime persistente ligado)", () => {
+    process.env.WRITE_ENABLED = 'true';
+    expect(resolveWriteEnabled()).toBe(true);
+  });
+
+  it("qualquer valor inesperado de WRITE_ENABLED (ex.: '1', 'yes') => false (fail-safe)", () => {
+    process.env.WRITE_ENABLED = '1';
+    expect(resolveWriteEnabled()).toBe(false);
+    process.env.WRITE_ENABLED = 'yes';
+    expect(resolveWriteEnabled()).toBe(false);
+  });
+
+  it("WRITE_OVERRIDE vazio (input não preenchido no dispatch) cai no WRITE_ENABLED", () => {
+    process.env.WRITE_OVERRIDE = '';
+    process.env.WRITE_ENABLED = 'true';
+    expect(resolveWriteEnabled()).toBe(true);
   });
 });

@@ -5,7 +5,19 @@ on:
   schedule:
     # 06:00 UTC = 03:00 BRT (Brasil não observa horário de verão desde 2019) — D-52.
     - cron: '0 6 * * *'
-  workflow_dispatch: {} # permite disparo manual para teste (SC#2: rodar 2x no mesmo dia)
+  workflow_dispatch:
+    # Disparo manual para teste (SC#2: rodar 2x no mesmo dia) e para o 1º rollout
+    # supervisionado (D-64): permite rodar em dry-run e depois com escrita real sem
+    # tocar a repository variable persistente WRITE_ENABLED.
+    inputs:
+      write:
+        description: 'Gravar de verdade na loja? (false = dry-run, D-62/D-64)'
+        type: boolean
+        default: false
+      first_rollout:
+        description: 'É o 1º rollout supervisionado? (true isenta o disjuntor D-63)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write # mínimo necessário para o commit-back (D-45)
@@ -39,6 +51,19 @@ jobs:
           # para "qualquer tamanho com estoque" durante promoções agressivas —
           # liga/desliga sem editar código nem redeploy.
           MIN_SIZES_IN_STOCK: ${{ vars.MIN_SIZES_IN_STOCK }}
+          # Kill switch do regime diário de escrita automática (D-62). Ausente ou
+          # 'false' => dry-run (calcula e loga o que gravaria, NÃO escreve). Defina
+          # a repository variable WRITE_ENABLED='true' em Settings > Secrets and
+          # variables > Actions > Variables para ligar a escrita real do cron —
+          # liga/desliga sem editar código nem redeploy. Botão nativo "Disable
+          # workflow" é a parada dura (o cron nem dispara).
+          WRITE_ENABLED: ${{ vars.WRITE_ENABLED }}
+          # Override manual do run: input do workflow_dispatch tem prioridade sobre
+          # WRITE_ENABLED (1º rollout supervisionado D-64). Vazio no cron agendado.
+          WRITE_OVERRIDE: ${{ github.event.inputs.write }}
+          # Isenção do disjuntor (D-63) só no 1º rollout supervisionado. Vazio/false
+          # no regime automático — o disjuntor sempre vale a partir do 2º run.
+          FIRST_ROLLOUT: ${{ github.event.inputs.first_rollout }}
         # Sem argumentos, o script ingere o CATÁLOGO COMPLETO (as 11 categorias
         # de taxonomia, D-26) — a lista canônica vive em product-group.js, então
         # nenhum nome acentuado precisa ser digitado aqui no YAML.
