@@ -6,7 +6,7 @@
 // casos).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { notifyWriteFailure } from './notify-failure.js';
+import { notifyWriteFailure, notifyDailySummary } from './notify-failure.js';
 
 describe('notifyWriteFailure', () => {
   const originalFetch = globalThis.fetch;
@@ -92,6 +92,77 @@ describe('notifyWriteFailure', () => {
         error: new Error('falha ao gravar'),
         triggeredBy: 'operador',
       })
+    ).resolves.toEqual({ notified: false, reason: 'rede fora do ar' });
+  });
+});
+
+// Resumo diário (D-69) — mesmo contrato de notifyWriteFailure: reusa o webhook
+// WRITE_FAILURE_WEBHOOK_URL, degrada silenciosamente se ausente, NUNCA lança,
+// payload sem credencial. Envia o resumo do que mudou (alterados/zerados/novos).
+describe('notifyDailySummary', () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebhookUrl = process.env.WRITE_FAILURE_WEBHOOK_URL;
+
+  beforeEach(() => {
+    delete process.env.WRITE_FAILURE_WEBHOOK_URL;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalWebhookUrl === undefined) {
+      delete process.env.WRITE_FAILURE_WEBHOOK_URL;
+    } else {
+      process.env.WRITE_FAILURE_WEBHOOK_URL = originalWebhookUrl;
+    }
+  });
+
+  it('degrada (notified:false) sem chamar fetch quando o webhook não está configurado', async () => {
+    globalThis.fetch = () => {
+      throw new Error('fetch NUNCA deveria ser chamado sem webhook configurado');
+    };
+
+    const result = await notifyDailySummary({
+      summary: { alterados: 3, zerados: 1, novos: 2 },
+    });
+
+    expect(result).toEqual({ notified: false, reason: 'webhook not configured' });
+  });
+
+  it('faz UM fetch com payload sem credencial e resumo textual, notified:true em sucesso', async () => {
+    process.env.WRITE_FAILURE_WEBHOOK_URL = 'https://hooks.example.com/webhook';
+    let calls = 0;
+    let captured = null;
+    globalThis.fetch = async (url, options) => {
+      calls += 1;
+      captured = { url, method: options.method, headers: options.headers, body: JSON.parse(options.body) };
+      return new Response('', { status: 200 });
+    };
+
+    const result = await notifyDailySummary({
+      summary: { alterados: 3, zerados: 1, novos: 2, dryRun: false },
+    });
+
+    expect(result).toEqual({ notified: true });
+    expect(calls).toBe(1);
+    expect(captured.method).toBe('POST');
+    expect(captured.headers['Content-Type']).toBe('application/json');
+    expect(captured.body.text).toMatch(/3/); // alterados
+    expect(captured.body.content).toBe(captured.body.text);
+    expect(captured.body.summary).toMatchObject({ alterados: 3, zerados: 1, novos: 2 });
+    expect(typeof captured.body.timestamp).toBe('string');
+    // Sem credencial no payload (V7/T-07-16).
+    expect(captured.body.accessToken).toBeUndefined();
+    expect(captured.headers.Authorization).toBeUndefined();
+  });
+
+  it('Pitfall 5: exceção do fetch NUNCA propaga', async () => {
+    process.env.WRITE_FAILURE_WEBHOOK_URL = 'https://hooks.example.com/webhook';
+    globalThis.fetch = () => {
+      throw new Error('rede fora do ar');
+    };
+
+    await expect(
+      notifyDailySummary({ summary: { alterados: 1, zerados: 0, novos: 0 } })
     ).resolves.toEqual({ notified: false, reason: 'rede fora do ar' });
   });
 });

@@ -32,9 +32,13 @@ import {
   getLatestSuccessfulRunId,
   getBaselineForRun,
   getLastSuccessfulIngestionRunSummary,
+  getLastWrittenValuesForAllProducts,
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
-import { notifyWriteFailure } from '../src/review/notify-failure.js';
+import { notifyWriteFailure, notifyDailySummary } from '../src/review/notify-failure.js';
+import { executeScheduledWrite } from '../src/review/write-executor.js';
+import { recommendForProduct } from '../src/recommendation/recommendation-engine.js';
+import { tripBreaker, setsEqual } from '../src/review/circuit-breaker.js';
 import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
 
 // Banda mínima da Defesa 1 (D-66, à discrição): o total lido hoje não pode cair
@@ -188,9 +192,81 @@ export async function runDailyJob({ categoryNames } = {}) {
   const baselineMap = getBaselineForRun({ runId });
   const queueEntries = buildReviewQueue(catalogProducts, baselineMap);
 
+  // Fila de aprovação preservada (D-47 -> D-61): não é mais o gate de escrita, mas
+  // continua sendo registrada como histórico/verificação opcional pós-escrita.
   seedPendingApprovalQueue({ runId, queueEntries });
 
-  return { skipped: false, runId, queueLength: queueEntries.length, ingestionResult };
+  // --- Escrita automática recorrente (D-61/D-68), cercada pelo disjuntor (D-63),
+  // pelo kill switch (D-62) e pela Defesa 2 referencial (D-67, dentro de
+  // executeScheduledWrite). ---
+  const dryRun = !resolveWriteEnabled();
+  const isFirstRollout = process.env.FIRST_ROLLOUT === 'true';
+  const writeBaseline = getLastWrittenValuesForAllProducts();
+  const snapshotById = new Map(catalogProducts.map((p) => [String(p.productId), p]));
+
+  // Conjunto COMPLETO calculado (denominador do disjuntor): cada fonte elegível
+  // (com grade e visível, D-54/D-58) recebe suas recs; uma fonte que TINHA vitrine
+  // e ficou inelegível vira apagão intencional (conjunto vazio, contabilizado pelo
+  // disjuntor — Open Question 3). Fonte inelegível SEM baseline não gera nada.
+  const computed = [];
+  for (const source of catalogProducts) {
+    const productId = String(source.productId);
+    const eligible = source.hasAvailableGrade && source.published !== false;
+    const hadBaseline = (writeBaseline.get(productId) || []).length > 0;
+
+    if (eligible) {
+      const recommendedIds = recommendForProduct(productId, catalogProducts).map((r) =>
+        String(r.productId)
+      );
+      computed.push({ productId, recommendedIds, sourceEntry: source });
+    } else if (hadBaseline) {
+      computed.push({ productId, recommendedIds: [], sourceEntry: source });
+    }
+  }
+
+  // Disjuntor (D-63): mede churn/apagão do conjunto completo vs. o último valor
+  // gravado por produto; aborta+notifica se exceder o limiar (1º rollout isento).
+  const breaker = tripBreaker({ toWrite: computed, baseline: writeBaseline, isFirstRollout });
+  if (breaker.trip) {
+    console.error(`runDailyJob: disjuntor abortou a escrita — ${breaker.reason}`);
+    await notifyWriteFailure({
+      productId: 'daily-job',
+      error: new Error(breaker.reason),
+      triggeredBy: 'scheduled',
+    });
+    await notifyDailySummary({
+      summary: { alterados: 0, zerados: 0, novos: 0, aborted: 'circuit-breaker', reason: breaker.reason },
+    });
+    return { skipped: false, runId, queueLength: queueEntries.length, ingestionResult, aborted: 'circuit-breaker' };
+  }
+
+  // Grava só os com diff real vs. baseline (D-68); a Defesa 2 (D-67) roda DENTRO de
+  // executeScheduledWrite (recebe snapshotById). dryRun vem do kill switch (D-62).
+  let alterados = 0;
+  let zerados = 0;
+  let novos = 0;
+  for (const item of computed) {
+    const before = writeBaseline.get(item.productId) || [];
+    if (setsEqual(before, item.recommendedIds)) continue; // sem diff, não grava (D-68)
+
+    await executeScheduledWrite({
+      productId: item.productId,
+      recommendedIds: item.recommendedIds,
+      dryRun,
+      runId,
+      sourceEntry: item.sourceEntry,
+      snapshotById,
+    });
+
+    if (before.length === 0 && item.recommendedIds.length > 0) novos += 1;
+    else if (before.length > 0 && item.recommendedIds.length === 0) zerados += 1;
+    else alterados += 1;
+  }
+
+  const summary = { alterados, zerados, novos, dryRun };
+  await notifyDailySummary({ summary });
+
+  return { skipped: false, runId, queueLength: queueEntries.length, ingestionResult, summary };
 }
 
 // Idioma ESM padrão (mesma forma de `rollback.js`/`src/review-server.js`): só

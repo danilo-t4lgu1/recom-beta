@@ -88,18 +88,20 @@ const STORE_CATEGORIES = [{ id: 100, name: { pt: 'Vestidos' } }];
  * de estoque disponível (>=3 tamanhos com estoque > 0, D-04) por padrão e SEM
  * nenhuma tag de tecido mapeável (D-16) — mesmo fixture de `ingest-catalog.test.js`.
  */
-function makeProduct({ id, colorValue = 'Preto' }) {
+function makeProduct({ id, colorValue = 'Preto', published = true, inStock = true }) {
+  const stock = inStock ? 5 : 0; // grade disponível exige >=3 tamanhos com estoque>0 (D-04)
   return {
     id,
     name: { pt: `Produto ${id}` },
     handle: { pt: `produto-${id}` },
     canonical_url: `https://loja-talgui.example/produto-${id}`,
     tags: '',
+    published,
     attributes: [{ pt: 'Cor' }, { pt: 'Tamanho' }],
     variants: [
-      { id: `${id}-v1`, values: [{ pt: colorValue }, { pt: 'P' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
-      { id: `${id}-v2`, values: [{ pt: colorValue }, { pt: 'M' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
-      { id: `${id}-v3`, values: [{ pt: colorValue }, { pt: 'G' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
+      { id: `${id}-v1`, values: [{ pt: colorValue }, { pt: 'P' }], inventory_levels: [{ location_id: 'loc-1', stock }] },
+      { id: `${id}-v2`, values: [{ pt: colorValue }, { pt: 'M' }], inventory_levels: [{ location_id: 'loc-1', stock }] },
+      { id: `${id}-v3`, values: [{ pt: colorValue }, { pt: 'G' }], inventory_levels: [{ location_id: 'loc-1', stock }] },
     ],
     categories: [{ id: 999, name: { pt: 'Vestidos' } }],
   };
@@ -375,5 +377,157 @@ describe('runDailyJob — Defesa 1 integração (D-66)', () => {
     expect(result.aborted).toBe('integrity');
     expect(notifyWriteFailure).toHaveBeenCalledTimes(1);
     expect(executeScheduledWrite).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Semeia, via conexão raw, um run ANTIGO (ontem) + um produto + uma linha de
+ * write_log 'success' para esse produto — dando a ele um baseline de vitrine já
+ * gravada. Usado para testar o apagão intencional (D-54/D-68): uma fonte que
+ * TINHA recomendação e ficou inelegível (esgotada/oculta) vira escrita de
+ * conjunto vazio. `products_read` baixo mantém a banda da Defesa 1 satisfeita.
+ */
+async function seedBackdatedProductWriteLog(dir, { productId, writtenValue, productsRead = 1 }) {
+  await import('../src/db/catalog-store.js');
+  const { default: Database } = await import('better-sqlite3');
+  const raw = new Database(join(dir, 'catalog.db'));
+  try {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const info = raw
+      .prepare(
+        `INSERT INTO ingestion_runs (started_at, finished_at, category_id, category_name, products_read, status, category_counts)
+         VALUES (@startedAt, @startedAt, '100', 'Vestidos', @productsRead, 'success', @cc)`
+      )
+      .run({ startedAt: yesterday, productsRead, cc: JSON.stringify({ Vestidos: productsRead }) });
+    const runId = Number(info.lastInsertRowid);
+    raw
+      .prepare(`INSERT OR IGNORE INTO products (id, name) VALUES (@id, @name)`)
+      .run({ id: String(productId), name: `Produto ${productId}` });
+    raw
+      .prepare(
+        `INSERT INTO write_log (product_id, run_id, metafield_id, previous_value, written_value, triggered_by, status, error_message, written_at)
+         VALUES (@productId, @runId, 'mf-1', NULL, @writtenValue, 'scheduled', 'success', NULL, @writtenAt)`
+      )
+      .run({
+        productId: String(productId),
+        runId,
+        writtenValue: JSON.stringify(writtenValue),
+        writtenAt: yesterday,
+      });
+  } finally {
+    raw.close();
+  }
+}
+
+describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67), resumo (D-69)', () => {
+  const envKeys = ['WRITE_ENABLED', 'WRITE_OVERRIDE', 'FIRST_ROLLOUT'];
+  const savedEnv = {};
+
+  beforeEach(() => {
+    for (const k of envKeys) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+    // Duas fontes Vestidos, mesma cor, ambas com grade e visíveis (elegíveis).
+    listCategories.mockResolvedValue([{ id: 100, name: { pt: 'Vestidos' } }]);
+  });
+
+  afterEach(() => {
+    for (const k of envKeys) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  it('kill switch off (dry-run): executeScheduledWrite com dryRun:true para os diffs; resumo enviado; sem escrita real', async () => {
+    process.env.FIRST_ROLLOUT = 'true'; // isenta o disjuntor (baseline vazio => churn 100%)
+    const a = makeProduct({ id: 'prod-a' });
+    const b = makeProduct({ id: 'prod-b' });
+    listProducts.mockResolvedValue({ products: [a, b], hasNextPage: false });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+    const { notifyDailySummary, notifyWriteFailure } = await import('../src/review/notify-failure.js');
+
+    const result = await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    expect(result.aborted).toBeUndefined();
+    expect(executeScheduledWrite).toHaveBeenCalled();
+    for (const call of executeScheduledWrite.mock.calls) {
+      expect(call[0].dryRun).toBe(true);
+    }
+    // Ambas as fontes elegíveis com diff (baseline vazio) recebem escrita.
+    const writtenIds = executeScheduledWrite.mock.calls.map((c) => c[0].productId).sort();
+    expect(writtenIds).toEqual(['prod-a', 'prod-b']);
+    // snapshotById passado para a Defesa 2 (D-67).
+    expect(executeScheduledWrite.mock.calls[0][0].snapshotById).toBeInstanceOf(Map);
+    expect(notifyDailySummary).toHaveBeenCalledTimes(1);
+    expect(notifyWriteFailure).not.toHaveBeenCalled();
+  });
+
+  it('kill switch on: executeScheduledWrite com dryRun:false só para elegíveis+diff; fonte oculta (sem baseline) não recebe escrita', async () => {
+    process.env.WRITE_OVERRIDE = 'true';
+    process.env.FIRST_ROLLOUT = 'true';
+    const a = makeProduct({ id: 'prod-a' });
+    const b = makeProduct({ id: 'prod-b' });
+    const hidden = makeProduct({ id: 'prod-hidden', published: false });
+    listProducts.mockResolvedValue({ products: [a, b, hidden], hasNextPage: false });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    const calls = executeScheduledWrite.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call[0].dryRun).toBe(false);
+    }
+    const writtenIds = calls.map((c) => c[0].productId);
+    expect(writtenIds).toContain('prod-a');
+    expect(writtenIds).toContain('prod-b');
+    // Fonte oculta sem baseline NUNCA vira alvo de escrita.
+    expect(writtenIds).not.toContain('prod-hidden');
+  });
+
+  it('apagão intencional: fonte esgotada que TINHA vitrine vira escrita de conjunto vazio (D-54/D-68)', async () => {
+    process.env.WRITE_OVERRIDE = 'true';
+    process.env.FIRST_ROLLOUT = 'true'; // isenta o disjuntor do apagão 100%
+    // Baseline gravado ontem para prod-esgotada.
+    await seedBackdatedProductWriteLog(tempDir, {
+      productId: 'prod-esgotada',
+      writtenValue: ['rec-antiga'],
+      productsRead: 1,
+    });
+    const esgotada = makeProduct({ id: 'prod-esgotada', inStock: false });
+    listProducts.mockResolvedValue({ products: [esgotada], hasNextPage: false });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    const call = executeScheduledWrite.mock.calls.find((c) => c[0].productId === 'prod-esgotada');
+    expect(call).toBeDefined();
+    expect(call[0].recommendedIds).toEqual([]); // conjunto vazio (apagão)
+  });
+
+  it('disjuntor disparado (churn 100%, não-1º-rollout): nenhuma escrita real + notifyWriteFailure', async () => {
+    // FIRST_ROLLOUT ausente => disjuntor ativo; baseline vazio => churn 100% > 30%.
+    const a = makeProduct({ id: 'prod-a' });
+    const b = makeProduct({ id: 'prod-b' });
+    listProducts.mockResolvedValue({ products: [a, b], hasNextPage: false });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+    const { notifyWriteFailure } = await import('../src/review/notify-failure.js');
+
+    const result = await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    expect(result.aborted).toBe('circuit-breaker');
+    expect(executeScheduledWrite).not.toHaveBeenCalled();
+    expect(notifyWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ productId: 'daily-job', triggeredBy: 'scheduled' })
+    );
   });
 });
