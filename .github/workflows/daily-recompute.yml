@@ -64,6 +64,13 @@ jobs:
           # Isenção do disjuntor (D-63) só no 1º rollout supervisionado. Vazio/false
           # no regime automático — o disjuntor sempre vale a partir do 2º run.
           FIRST_ROLLOUT: ${{ github.event.inputs.first_rollout }}
+          # Bypass do guard de mesmo dia (D-48) — achado do 1º rollout supervisionado
+          # (07-08/D-64): dry-run e escrita real no MESMO dia via workflow_dispatch
+          # colidem com o guard (a 2ª chamada cairia no skip e não gravaria nada).
+          # SÓ verdadeiro quando disparado manualmente (workflow_dispatch); o `schedule`
+          # do cron NUNCA passa por aqui com valor 'true' — o guard segue protegendo
+          # o regime automático diário (nunca reingere/roda 2x sozinho no mesmo dia).
+          ALLOW_SAME_DAY_RERUN: ${{ github.event_name == 'workflow_dispatch' }}
         # Sem argumentos, o script ingere o CATÁLOGO COMPLETO (as 11 categorias
         # de taxonomia, D-26) — a lista canônica vive em product-group.js, então
         # nenhum nome acentuado precisa ser digitado aqui no YAML.

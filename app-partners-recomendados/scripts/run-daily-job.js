@@ -62,7 +62,15 @@ const MIN_SNAPSHOT_BAND_RATIO = 0.7;
  * Segunda chamada no MESMO dia (já existe run success hoje): retorna
  * `{ skipped: true, runId: <run existente>, queueLength: 0 }` imediatamente, SEM
  * chamar `runIngestion` — nenhuma chamada de rede adicional acontece.
- * @param {{ categoryNames?: string[] }} [params]
+ *
+ * `allowSameDayRerun` (achado do 1º rollout supervisionado, 07-08/D-64): o fluxo
+ * "dry-run agora, escrita real depois no MESMO dia" colide com este guard — sem
+ * bypass explícito, a chamada de escrita real cairia no skip e não gravaria nada
+ * (workflow verde, zero efeito). Default `false` preserva 100% o comportamento
+ * original do guard (D-48) para o cron agendado — só o `workflow_dispatch` manual
+ * passa `true` (nunca o `schedule`), então o cron automático NUNCA reingere/roda
+ * duas vezes sozinho no mesmo dia.
+ * @param {{ categoryNames?: string[], allowSameDayRerun?: boolean }} [params]
  * @returns {Promise<{ skipped: boolean, runId: number|null, queueLength: number, ingestionResult?: object }>}
  */
 /**
@@ -149,10 +157,10 @@ export function evaluateSnapshotIntegrity({
   return { ok: true };
 }
 
-export async function runDailyJob({ categoryNames } = {}) {
+export async function runDailyJob({ categoryNames, allowSameDayRerun = false } = {}) {
   const existingRunId = getSuccessfulRunForToday();
 
-  if (existingRunId != null) {
+  if (existingRunId != null && !allowSameDayRerun) {
     console.log(
       `runDailyJob: já existe uma execução bem-sucedida hoje (run_id=${existingRunId}) — ` +
         'pulando ingestão para preservar decisões de aprovação já registradas (D-48/SC#2).'
@@ -281,7 +289,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const categoryNames =
     process.argv.slice(2).length > 0 ? process.argv.slice(2) : ALL_TAXONOMY_CATEGORY_NAMES;
 
-  runDailyJob({ categoryNames })
+  // Bypass do guard de mesmo dia (07-08/D-64) — só o workflow_dispatch manual do
+  // GitHub Actions define esta env var; o cron agendado NUNCA a define (ver YAML).
+  const allowSameDayRerun = process.env.ALLOW_SAME_DAY_RERUN === 'true';
+
+  runDailyJob({ categoryNames, allowSameDayRerun })
     .then((result) => {
       console.log('\n=== Resumo da execução do job diário ===');
       console.log(`  skipped: ${result.skipped}`);

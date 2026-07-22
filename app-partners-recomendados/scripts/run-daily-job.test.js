@@ -180,6 +180,45 @@ describe('runDailyJob', () => {
     expect(store.getLatestSuccessfulRunId()).toBe(first.runId);
   });
 
+  it('allowSameDayRerun:true ignora o guard de mesmo dia e roda ingestão de novo, criando um segundo run_id (Task 2/4 do 07-08 — dry-run e escrita real no mesmo dia)', async () => {
+    const produto1 = makeProduct({ id: 'produto-1' });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '100') return { products: [produto1], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const first = await runDailyJob({});
+    expect(first.skipped).toBe(false);
+    expect(listCategories).toHaveBeenCalledTimes(1);
+
+    const second = await runDailyJob({ allowSameDayRerun: true });
+
+    expect(second.skipped).toBe(false);
+    expect(second.runId).not.toBe(first.runId);
+    // Ingestão rodou de novo — chamadas adicionais aos mocks.
+    expect(listCategories).toHaveBeenCalledTimes(2);
+    expect(listProducts).toHaveBeenCalledTimes(2);
+
+    const store = await import('../src/db/catalog-store.js');
+    expect(store.getLatestSuccessfulRunId()).toBe(second.runId);
+  });
+
+  it('allowSameDayRerun ausente/false preserva o comportamento padrão (skip) mesmo passando explicitamente false', async () => {
+    const produto1 = makeProduct({ id: 'produto-1' });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '100') return { products: [produto1], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const first = await runDailyJob({});
+    const second = await runDailyJob({ allowSameDayRerun: false });
+
+    expect(second).toEqual({ skipped: true, runId: first.runId, queueLength: 0 });
+    expect(listCategories).toHaveBeenCalledTimes(1);
+  });
+
   it('importar o módulo NUNCA dispara chamada de rede nem grava no banco (Test 3, guard de CLI)', async () => {
     await import('./run-daily-job.js');
 
