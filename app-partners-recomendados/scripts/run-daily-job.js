@@ -31,10 +31,16 @@ import {
   getLatestSnapshotProducts,
   getLatestSuccessfulRunId,
   getBaselineForRun,
+  getLastSuccessfulIngestionRunSummary,
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
 import { notifyWriteFailure } from '../src/review/notify-failure.js';
 import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
+
+// Banda mínima da Defesa 1 (D-66, à discrição): o total lido hoje não pode cair
+// abaixo de 70% do último run bem-sucedido, senão trata-se de leitura truncada e
+// a escrita é abortada. Ajustável se o catálogo tiver sazonalidade acentuada.
+const MIN_SNAPSHOT_BAND_RATIO = 0.7;
 
 /**
  * Orquestra uma execução do job diário: guard de idempotência (D-48) -> ingestão
@@ -77,6 +83,68 @@ export function resolveWriteEnabled() {
   return process.env.WRITE_ENABLED === 'true';
 }
 
+/**
+ * Defesa 1 de integridade do snapshot (D-66) — função PURA. Confirma que a
+ * ingestão devolveu um catálogo plausível e completo ANTES de qualquer escrita:
+ * uma leitura truncada da API (rate-limit/paginação parcial) NUNCA pode virar um
+ * apagão em massa da vitrine.
+ *
+ * Aborta (retorna `{ ok: false, reason }`) se:
+ *   1. alguma categoria ingerida voltou com 0 produtos (ou contagem não-numérica);
+ *   2. nenhuma categoria retornou contagem (snapshot vazio/totalmente truncado);
+ *   3. o total lido caiu abaixo de `minBandRatio` (default 70%) do total do último
+ *      run bem-sucedido — só quando existe um run anterior com total positivo (a
+ *      primeira ingestão da vida não tem baseline de banda e passa).
+ *
+ * `categoryCounts` é a contagem BRUTA por categoria capturada na ingestão (D-66),
+ * chaveada pela mesma grafia que a ingestão resolveu — checar as entradas
+ * presentes evita divergência com uma lista externa de nomes solicitados.
+ * @param {{
+ *   categoryCounts: Record<string, number>,
+ *   previousProductsRead: number|null|undefined,
+ *   currentProductsRead: number,
+ *   minBandRatio?: number,
+ * }} params
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function evaluateSnapshotIntegrity({
+  categoryCounts,
+  previousProductsRead,
+  currentProductsRead,
+  minBandRatio = MIN_SNAPSHOT_BAND_RATIO,
+}) {
+  const counts = categoryCounts && typeof categoryCounts === 'object' ? categoryCounts : {};
+  const names = Object.keys(counts);
+
+  if (names.length === 0) {
+    return { ok: false, reason: 'nenhuma categoria retornou contagem — snapshot vazio/truncado, escrita abortada (D-66)' };
+  }
+
+  for (const name of names) {
+    const count = counts[name];
+    if (!(typeof count === 'number' && count > 0)) {
+      return {
+        ok: false,
+        reason: `categoria "${name}" voltou com ${count} produto(s) — leitura truncada, escrita abortada (D-66)`,
+      };
+    }
+  }
+
+  if (typeof previousProductsRead === 'number' && previousProductsRead > 0) {
+    const floor = previousProductsRead * minBandRatio;
+    if (typeof currentProductsRead === 'number' && currentProductsRead < floor) {
+      return {
+        ok: false,
+        reason:
+          `total lido (${currentProductsRead}) abaixo de ${Math.round(minBandRatio * 100)}% do último run ` +
+          `bem-sucedido (${previousProductsRead}) — leitura truncada, escrita abortada (D-66)`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
 export async function runDailyJob({ categoryNames } = {}) {
   const existingRunId = getSuccessfulRunForToday();
 
@@ -88,10 +156,35 @@ export async function runDailyJob({ categoryNames } = {}) {
     return { skipped: true, runId: existingRunId, queueLength: 0 };
   }
 
+  // Defesa 1 (D-66): captura o resumo do ÚLTIMO run bem-sucedido ANTES de ingerir —
+  // depois da ingestão, `getLastSuccessfulIngestionRunSummary` já apontaria para o
+  // run recém-criado (hoje), inutilizando a comparação de banda vs. o run anterior.
+  const previousSummary = getLastSuccessfulIngestionRunSummary();
+
   const ingestionResult = await runIngestion(categoryNames ? { categoryNames } : undefined);
 
-  const catalogProducts = getLatestSnapshotProducts();
   const runId = getLatestSuccessfulRunId();
+
+  // Defesa 1 (D-66): valida a integridade do snapshot antes de qualquer escrita.
+  // Leitura truncada (categoria com 0, snapshot vazio, ou total fora da banda vs.
+  // o run anterior) ABORTA a fase de escrita e notifica — nunca toca a loja.
+  const integrity = evaluateSnapshotIntegrity({
+    categoryCounts: ingestionResult.categoryCounts,
+    previousProductsRead: previousSummary ? previousSummary.productsRead : null,
+    currentProductsRead: ingestionResult.productsRead,
+  });
+
+  if (!integrity.ok) {
+    console.error(`runDailyJob: Defesa 1 abortou a escrita — ${integrity.reason}`);
+    await notifyWriteFailure({
+      productId: 'daily-job',
+      error: new Error(integrity.reason),
+      triggeredBy: 'scheduled',
+    });
+    return { skipped: false, runId, queueLength: 0, ingestionResult, aborted: 'integrity' };
+  }
+
+  const catalogProducts = getLatestSnapshotProducts();
   const baselineMap = getBaselineForRun({ runId });
   const queueEntries = buildReviewQueue(catalogProducts, baselineMap);
 

@@ -22,13 +22,64 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listCategories, listProducts, getMetafields } from '../src/nuvemshop-client/client.js';
-import { resolveWriteEnabled } from './run-daily-job.js';
+import { resolveWriteEnabled, evaluateSnapshotIntegrity } from './run-daily-job.js';
 
 vi.mock('../src/nuvemshop-client/client.js', () => ({
   listCategories: vi.fn(),
   listProducts: vi.fn(),
   getMetafields: vi.fn(),
 }));
+
+// A escrita real e as notificações são mockadas — o job de teste NUNCA toca a
+// rede nem a loja de produção. `executeScheduledWrite` é um vi.fn controlado por
+// teste (asserção de dryRun/ids); `notifyWriteFailure`/`notifyDailySummary` viram
+// vi.fn para provar aborto+notificação sem depender de webhook real.
+vi.mock('../src/review/write-executor.js', () => ({
+  executeScheduledWrite: vi.fn(async ({ recommendedIds = [], dryRun = false } = {}) => ({
+    written: !dryRun && recommendedIds.length > 0,
+    dryRun: !!dryRun,
+    approvedIds: recommendedIds,
+  })),
+}));
+
+vi.mock('../src/review/notify-failure.js', () => ({
+  notifyWriteFailure: vi.fn(async () => ({ notified: false })),
+  notifyDailySummary: vi.fn(async () => ({ notified: false })),
+}));
+
+/**
+ * Semeia um run de ingestão bem-sucedido ANTIGO (started_at = ontem) diretamente
+ * no SQLite temporário via uma conexão raw — sem mockar o catalog-store (que
+ * gerencia sua própria conexão singleton e precisa dela real para a ingestão). O
+ * run antigo tem `products_read` alto para testar a banda da Defesa 1: o guard de
+ * idempotência diária (date(started_at)=date('now')) NÃO o considera "de hoje",
+ * então runDailyJob prossegue e o compara como "último run bem-sucedido". A
+ * conexão raw é fechada imediatamente (lock de arquivo no Windows).
+ */
+async function seedBackdatedSuccessfulRun(dir, { productsRead, categoryCounts }) {
+  // Garante que o schema exista (catalog-store cria as tabelas ao abrir).
+  await import('../src/db/catalog-store.js');
+  const { default: Database } = await import('better-sqlite3');
+  const raw = new Database(join(dir, 'catalog.db'));
+  try {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    raw
+      .prepare(
+        `INSERT INTO ingestion_runs (started_at, finished_at, category_id, category_name, products_read, status, category_counts)
+         VALUES (@startedAt, @finishedAt, @categoryId, @categoryName, @productsRead, 'success', @categoryCounts)`
+      )
+      .run({
+        startedAt: yesterday,
+        finishedAt: yesterday,
+        categoryId: '100',
+        categoryName: 'Vestidos',
+        productsRead,
+        categoryCounts: JSON.stringify(categoryCounts),
+      });
+  } finally {
+    raw.close();
+  }
+}
 
 const STORE_CATEGORIES = [{ id: 100, name: { pt: 'Vestidos' } }];
 
@@ -220,5 +271,109 @@ describe('resolveWriteEnabled (kill switch D-62)', () => {
     process.env.WRITE_OVERRIDE = '';
     process.env.WRITE_ENABLED = 'true';
     expect(resolveWriteEnabled()).toBe(true);
+  });
+});
+
+// Defesa 1 de integridade do snapshot (D-66) — função pura. Uma leitura truncada
+// da API (categoria colapsada a 0, ou total muito abaixo do último run) NUNCA pode
+// virar um apagão em massa: a Defesa 1 aborta a escrita ANTES de qualquer gravação.
+describe('evaluateSnapshotIntegrity (Defesa 1 D-66)', () => {
+  it('ok quando toda categoria tem >0 e não há run anterior (primeira ingestão)', () => {
+    const result = evaluateSnapshotIntegrity({
+      categoryCounts: { Vestidos: 10, Blusas: 5 },
+      previousProductsRead: null,
+      currentProductsRead: 15,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('aborta quando alguma categoria voltou com 0 produtos (leitura truncada)', () => {
+    const result = evaluateSnapshotIntegrity({
+      categoryCounts: { Vestidos: 10, Blusas: 0 },
+      previousProductsRead: null,
+      currentProductsRead: 10,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/Blusas/);
+  });
+
+  it('aborta quando o total cai abaixo de 70% do último run bem-sucedido (banda)', () => {
+    const result = evaluateSnapshotIntegrity({
+      categoryCounts: { Vestidos: 60 },
+      previousProductsRead: 100,
+      currentProductsRead: 60, // 60 < 70
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/total/i);
+  });
+
+  it('ok quando o total fica dentro da banda (>=70% do último run)', () => {
+    const result = evaluateSnapshotIntegrity({
+      categoryCounts: { Vestidos: 80 },
+      previousProductsRead: 100,
+      currentProductsRead: 80, // 80 >= 70
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('aborta quando não há nenhuma contagem de categoria (snapshot vazio)', () => {
+    const result = evaluateSnapshotIntegrity({
+      categoryCounts: {},
+      previousProductsRead: null,
+      currentProductsRead: 0,
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('runDailyJob — Defesa 1 integração (D-66)', () => {
+  it('categoria com 0 produtos: aborta com aborted:integrity, notifica e NÃO grava', async () => {
+    listCategories.mockResolvedValue([
+      { id: 100, name: { pt: 'Vestidos' } },
+      { id: 101, name: { pt: 'Blusas' } },
+    ]);
+    const produto1 = makeProduct({ id: 'produto-1' });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '100') return { products: [produto1], hasNextPage: false };
+      return { products: [], hasNextPage: false }; // Blusas volta vazia => 0 produtos
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { notifyWriteFailure } = await import('../src/review/notify-failure.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    const result = await runDailyJob({ categoryNames: ['Vestidos', 'Blusas'] });
+
+    expect(result.aborted).toBe('integrity');
+    expect(notifyWriteFailure).toHaveBeenCalledTimes(1);
+    expect(notifyWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ productId: 'daily-job', triggeredBy: 'scheduled' })
+    );
+    expect(executeScheduledWrite).not.toHaveBeenCalled();
+  });
+
+  it('total abaixo da banda vs último run: aborta com aborted:integrity, notifica e NÃO grava', async () => {
+    listCategories.mockResolvedValue([{ id: 100, name: { pt: 'Vestidos' } }]);
+    const produto1 = makeProduct({ id: 'produto-1' });
+    listProducts.mockImplementation(async ({ categoryId }) => {
+      if (String(categoryId) === '100') return { products: [produto1], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    // Último run bem-sucedido (ontem) leu 100 produtos — hoje só leu 1 (1 < 70% de 100).
+    await seedBackdatedSuccessfulRun(tempDir, {
+      productsRead: 100,
+      categoryCounts: { Vestidos: 100 },
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { notifyWriteFailure } = await import('../src/review/notify-failure.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    const result = await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    expect(result.aborted).toBe('integrity');
+    expect(notifyWriteFailure).toHaveBeenCalledTimes(1);
+    expect(executeScheduledWrite).not.toHaveBeenCalled();
   });
 });
