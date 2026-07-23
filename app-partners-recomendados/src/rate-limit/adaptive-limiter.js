@@ -48,23 +48,55 @@ export class AdaptiveRateLimiter {
 
 const MAX_429_RETRIES = 5; // WR-02: teto de tentativas — nunca recursão irrestrita
 
+// Gateway/infra transitórios observados em produção (ex: Cloudflare 502 na frente da
+// api.tiendanube.com, 2026-07-23) — nunca refletem um erro de lógica da nossa chamada,
+// diferente de um 500 genérico da própria API, que pode indicar payload inválido e por
+// isso NÃO entra neste conjunto (propaga imediato via assertOk, como antes).
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const MAX_TRANSIENT_RETRIES = 3; // WR-02 aplicado a 5xx/erro de rede: teto de tentativas
+const TRANSIENT_BACKOFF_BASE_MS = 500; // backoff exponencial: 500ms, 1000ms, 2000ms
+
 /**
  * Wrapper de fetch com throttling adaptativo (PLAT-02): espera se necessário, executa o
  * request, atualiza o limiter a partir dos headers reais da resposta, e faz retry em
- * 429 usando o x-rate-limit-reset real (nunca um backoff fixo). Se limiter não for
- * passado, cria uma instância local descartável para não quebrar chamadas sem limiter
- * explícito. Após MAX_429_RETRIES tentativas consecutivas de 429, lança erro em vez de
- * recursar indefinidamente (WR-02) — evita que um job de ingestão fique preso para
- * sempre em caso de quota esgotada/incidente prolongado na API.
+ * 429 usando o x-rate-limit-reset real (nunca um backoff fixo). Também faz retry com
+ * backoff exponencial para erros transitórios de gateway/infra (502/503/504) e para
+ * falhas de rede (fetch rejeitando, ex: ECONNRESET/timeout) — cenário real do 502
+ * Cloudflare que derrubou o cron diário em 2026-07-23 sem nenhuma nova tentativa. Se
+ * limiter não for passado, cria uma instância local descartável para não quebrar
+ * chamadas sem limiter explícito. Após o teto de tentativas (429 ou transitório), lança
+ * erro / devolve a última resposta ruim em vez de recursar indefinidamente (WR-02) —
+ * evita que um job de ingestão fique preso para sempre em caso de quota esgotada ou
+ * incidente prolongado na API.
  * @param {string} url
  * @param {RequestInit} [options]
  * @param {AdaptiveRateLimiter} [limiter]
- * @param {number} [attempt]
+ * @param {number} [attempt] tentativas de 429 já feitas
+ * @param {number} [transientAttempt] tentativas de 5xx transitório/erro de rede já feitas
  * @returns {Promise<Response>}
  */
-export async function fetchWithRateLimit(url, options, limiter = new AdaptiveRateLimiter(), attempt = 0) {
+export async function fetchWithRateLimit(
+  url,
+  options,
+  limiter = new AdaptiveRateLimiter(),
+  attempt = 0,
+  transientAttempt = 0
+) {
   await limiter.waitIfNeeded();
-  const response = await fetch(url, options);
+
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (networkError) {
+    if (transientAttempt >= MAX_TRANSIENT_RETRIES) {
+      throw new Error(
+        `fetchWithRateLimit: excedeu ${MAX_TRANSIENT_RETRIES} tentativas após erro de rede para ${url}: ${networkError.message}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_BACKOFF_BASE_MS * 2 ** transientAttempt));
+    return fetchWithRateLimit(url, options, limiter, attempt, transientAttempt + 1);
+  }
+
   limiter.updateFromHeaders(response.headers);
 
   if (response.status === 429) {
@@ -73,7 +105,17 @@ export async function fetchWithRateLimit(url, options, limiter = new AdaptiveRat
     }
     const resetMs = Number(response.headers.get('x-rate-limit-reset')) || 2000;
     await new Promise((resolve) => setTimeout(resolve, resetMs));
-    return fetchWithRateLimit(url, options, limiter, attempt + 1);
+    return fetchWithRateLimit(url, options, limiter, attempt + 1, transientAttempt);
+  }
+
+  if (TRANSIENT_STATUSES.has(response.status)) {
+    if (transientAttempt >= MAX_TRANSIENT_RETRIES) {
+      // Teto atingido: devolve a última resposta (não lança aqui) para que assertOk do
+      // client produza a mesma mensagem de erro de sempre, com o corpo real da resposta.
+      return response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_BACKOFF_BASE_MS * 2 ** transientAttempt));
+    return fetchWithRateLimit(url, options, limiter, attempt, transientAttempt + 1);
   }
 
   return response;
