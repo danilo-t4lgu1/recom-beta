@@ -21,12 +21,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listCategories, listProducts, getMetafields } from '../src/nuvemshop-client/client.js';
+import { listCategories, listProducts, listAllProducts, getMetafields } from '../src/nuvemshop-client/client.js';
 import { resolveWriteEnabled, evaluateSnapshotIntegrity } from './run-daily-job.js';
 
 vi.mock('../src/nuvemshop-client/client.js', () => ({
   listCategories: vi.fn(),
   listProducts: vi.fn(),
+  listAllProducts: vi.fn(),
   getMetafields: vi.fn(),
 }));
 
@@ -116,6 +117,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listCategories.mockResolvedValue(STORE_CATEGORIES);
   listProducts.mockResolvedValue({ products: [], hasNextPage: false });
+  listAllProducts.mockResolvedValue({ products: [], hasNextPage: false });
   getMetafields.mockResolvedValue([]);
 });
 
@@ -151,6 +153,35 @@ describe('runDailyJob', () => {
     const changes = store.listApprovalQueueChanges({ runId: result.runId });
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ productId: 'produto-1', status: 'pending' });
+  });
+
+  it('runDailyJob({ fullCatalog: true }) pagina o catálogo inteiro via listAllProducts, NUNCA chama listCategories/listProducts (achado 2026-07-28)', async () => {
+    const produtoEmColecaoNova = makeProduct({ id: 'produto-edit-1' });
+    // Simula o achado real: produto só visível numa coleção nova, sem nenhum dos
+    // 11 category_id da árvore original — mesmo assim a categoria "Vestidos"
+    // resolve por nome (extractCategoryRaw), então o produto entra no motor.
+    produtoEmColecaoNova.categories = [
+      { id: 39865623, name: { pt: 'EDIT' } },
+      { id: 36839648, name: { pt: 'Vestidos' } },
+    ];
+    listAllProducts.mockImplementation(async ({ page }) => {
+      if (page === 1) return { products: [produtoEmColecaoNova], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const result = await runDailyJob({ fullCatalog: true });
+
+    expect(result.skipped).toBe(false);
+    expect(listCategories).not.toHaveBeenCalled();
+    expect(listProducts).not.toHaveBeenCalled();
+    expect(listAllProducts).toHaveBeenCalled();
+
+    const store = await import('../src/db/catalog-store.js');
+    const rows = store.getLatestSnapshotProducts();
+    const found = rows.find((row) => row.productId === 'produto-edit-1');
+    expect(found).toBeDefined();
+    expect(found.productGroupCanonical).toBe('Look Inteiro');
   });
 
   it('segunda chamada no MESMO dia retorna skipped:true sem chamar runIngestion de novo, ingestion_runs continua com 1 linha (Test 2)', async () => {

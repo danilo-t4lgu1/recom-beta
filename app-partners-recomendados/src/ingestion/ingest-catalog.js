@@ -8,7 +8,7 @@
 // abrir o run, finaliza a execução com status 'failed' antes de relançar — nunca
 // deixa uma ingestion_run presa em 'running' silenciosamente.
 
-import { listCategories, listProducts, getMetafields } from '../nuvemshop-client/client.js';
+import { listCategories, listProducts, listAllProducts, getMetafields } from '../nuvemshop-client/client.js';
 import { AdaptiveRateLimiter } from '../rate-limit/adaptive-limiter.js';
 import { hasAvailableGrade, getVariantStock } from './stock-availability.js';
 import { auditFabricTags, resolveFabricTagFromTags } from './fabric-taxonomy.js';
@@ -129,6 +129,36 @@ async function listAllProductsInCategory(categoryId, limiter) {
 }
 
 /**
+ * Pagina o catálogo INTEIRO da loja (sem filtro de categoria) até
+ * `hasNextPage === false` (per_page=200). Usado pelo modo `fullCatalog` de
+ * `runIngestion` — resolve a limitação estrutural em que `listAllProductsInCategory`
+ * só enxerga produtos ligados a um `category_id` específico conhecido de antemão:
+ * um produto cadastrado numa coleção nova (ex: "EDIT", "Novidades") nunca aparece
+ * nas 11 categorias de taxonomia originais e fica invisível para sempre, mesmo
+ * carregando a categoria certa (ex: "Vestidos") em ALGUMA outra árvore de
+ * categorias da loja. `extractCategoryRaw`/`resolveProductGroup` já resolvem por
+ * NOME (não por árvore/ID), então paginar o catálogo inteiro e deixar a
+ * classificação por nome decidir o grupo funciona independente de em qual
+ * categoria/coleção do site o produto foi incluído.
+ * @param {AdaptiveRateLimiter} limiter
+ * @returns {Promise<Array<object>>}
+ */
+async function listAllProductsGlobal(limiter) {
+  const allProducts = [];
+  let page = 1;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const result = await listAllProducts({ page, perPage: 200, limiter });
+    allProducts.push(...result.products);
+    hasNextPage = result.hasNextPage;
+    page += 1;
+  }
+
+  return allProducts;
+}
+
+/**
  * Lê o baseline informativo do Metafield de recomendação atual de um produto
  * (DATA-02), reaproveitando `getMetafields()` já existente — sem lógica de drift
  * (D-12). Recebe o mesmo `limiter` usado na paginação de produtos/categorias para que
@@ -160,46 +190,74 @@ async function readRecommendationBaseline(productId, limiter) {
  * lido por `getLatestSnapshotProducts()` (mesmo continuando nas tabelas via upsert).
  * Chamadas antigas (`runIngestion({ categoryName: 'Vestidos' })`, sem `categoryNames`)
  * continuam funcionando sem mudança (retrocompatibilidade).
- * @param {{ categoryName?: string, categoryNames?: string[] }} [params]
+ *
+ * `fullCatalog: true` (achado de 2026-07-28: 5 produtos reais confirmados invisíveis
+ * ao pipeline por estarem só em árvores de categoria "duplicadas" — Novidades/Outlet/
+ * Todos os Produtos 2/etc — sem nenhum dos 11 category_id da árvore original) ignora
+ * `categoryName`/`categoryNames` inteiramente e pagina o catálogo INTEIRO via
+ * `listAllProductsGlobal` (sem filtro de categoria) — a classificação por NOME
+ * (`extractCategoryRaw`/`resolveProductGroup`, já existente, inalterada) decide o
+ * grupo de cada produto independente de em qual categoria/coleção do site ele foi
+ * incluído. Tem prioridade sobre `categoryName`/`categoryNames` quando presente.
+ * @param {{ categoryName?: string, categoryNames?: string[], fullCatalog?: boolean }} [params]
  * @returns {Promise<{ runId: number, productsRead: number, status: 'success',
  *   availableCount: number, distinctTagCount: number, unmappedTagCount: number,
  *   unmappedCategoryCount: number, baselineNonNullCount: number,
  *   categoryCounts: Record<string, number> }>}
  */
-export async function runIngestion({ categoryName = 'Vestidos', categoryNames } = {}) {
+export async function runIngestion({ categoryName = 'Vestidos', categoryNames, fullCatalog = false } = {}) {
   const limiter = new AdaptiveRateLimiter();
-  const targetCategoryNames =
-    Array.isArray(categoryNames) && categoryNames.length > 0 ? categoryNames : [categoryName];
 
-  const resolvedCategories = [];
-  for (const targetName of targetCategoryNames) {
-    const resolved = await resolveCategoryIdByName(targetName, limiter);
-    resolvedCategories.push(resolved);
-  }
+  let allProducts;
+  let categoryCounts;
+  let runIdCategoryId;
+  let runIdCategoryName;
 
-  // D-33: mescla produtos de TODAS as categorias resolvidas em um único array,
-  // deduplicando por String(product.id) via Map (T-03.1-04) — defesa contra
-  // sobreposição entre categorias mescladas, mesmo que D-26 confirme que não é
-  // esperado hoje (cada produto pertence a uma única categoria).
-  const productsById = new Map();
-  // D-66/Defesa 1: contagem BRUTA por categoria (antes do merge/dedup, per Open
-  // Question 1) — base da banda de integridade do snapshot que o Plano 07-05 consome.
-  const categoryCounts = {};
-  for (const resolvedCategory of resolvedCategories) {
-    const categoryProducts = await listAllProductsInCategory(resolvedCategory.id, limiter);
-    categoryCounts[resolvedCategory.name] = categoryProducts.length;
-    for (const product of categoryProducts) {
-      productsById.set(String(product.id), product);
+  if (fullCatalog) {
+    allProducts = await listAllProductsGlobal(limiter);
+    // D-66/Defesa 1 exige categoryCounts não-vazio com toda contagem > 0 — uma
+    // única chave "sintética" cobre o mesmo contrato no modo catálogo completo
+    // (não há mais uma lista de categorias resolvidas para chavear por nome).
+    categoryCounts = { 'Catálogo Completo (todas as categorias)': allProducts.length };
+    runIdCategoryId = 'all';
+    runIdCategoryName = 'Catálogo Completo (todas as categorias)';
+  } else {
+    const targetCategoryNames =
+      Array.isArray(categoryNames) && categoryNames.length > 0 ? categoryNames : [categoryName];
+
+    const resolvedCategories = [];
+    for (const targetName of targetCategoryNames) {
+      const resolved = await resolveCategoryIdByName(targetName, limiter);
+      resolvedCategories.push(resolved);
     }
-  }
-  const allProducts = Array.from(productsById.values());
 
-  // Uma única ingestion_run para todas as categorias combinadas (D-33) — categoryId/
-  // categoryName viram strings unidas por vírgula, sem exigir mudança de schema em
-  // ingestion_runs.
+    // D-33: mescla produtos de TODAS as categorias resolvidas em um único array,
+    // deduplicando por String(product.id) via Map (T-03.1-04) — defesa contra
+    // sobreposição entre categorias mescladas, mesmo que D-26 confirme que não é
+    // esperado hoje (cada produto pertence a uma única categoria).
+    const productsById = new Map();
+    // D-66/Defesa 1: contagem BRUTA por categoria (antes do merge/dedup, per Open
+    // Question 1) — base da banda de integridade do snapshot que o Plano 07-05 consome.
+    const rawCategoryCounts = {};
+    for (const resolvedCategory of resolvedCategories) {
+      const categoryProducts = await listAllProductsInCategory(resolvedCategory.id, limiter);
+      rawCategoryCounts[resolvedCategory.name] = categoryProducts.length;
+      for (const product of categoryProducts) {
+        productsById.set(String(product.id), product);
+      }
+    }
+    allProducts = Array.from(productsById.values());
+    categoryCounts = rawCategoryCounts;
+    runIdCategoryId = resolvedCategories.map((c) => c.id).join(',');
+    runIdCategoryName = resolvedCategories.map((c) => c.name).join(', ');
+  }
+
+  // Uma única ingestion_run tanto para o modo multi-categoria (D-33) quanto para o
+  // modo catálogo completo — categoryId/categoryName viram strings, sem exigir
+  // mudança de schema em ingestion_runs.
   const runId = startIngestionRun({
-    categoryId: resolvedCategories.map((c) => c.id).join(','),
-    categoryName: resolvedCategories.map((c) => c.name).join(', '),
+    categoryId: runIdCategoryId,
+    categoryName: runIdCategoryName,
   });
 
   try {

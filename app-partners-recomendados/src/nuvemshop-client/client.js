@@ -226,3 +226,33 @@ export async function listProducts({ categoryId, page = 1, perPage = 200, limite
 
   return { products, hasNextPage };
 }
+
+/**
+ * Lista produtos da loja Talgui via GET /products SEM filtro de category_id —
+ * devolve o catálogo inteiro da loja, independente de em qual categoria/coleção
+ * cada produto foi incluído no admin (resolve a limitação de `listProducts`, que
+ * só enxerga produtos de UMA categoria por vez e exige conhecer o `category_id`
+ * de antemão). Mesma paginação/contrato de `listProducts` (PLAT-02, DATA-01).
+ * @param {{ page?: number, perPage?: number, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter }} params
+ * @returns {Promise<{ products: Array<object>, hasNextPage: boolean }>}
+ */
+export async function listAllProducts({ page = 1, perPage = 200, limiter } = {}) {
+  const { accessToken, storeId } = getAccessToken();
+  const url =
+    `${API_BASE}/${storeId}/products?page=${encodeURIComponent(page)}` +
+    `&per_page=${encodeURIComponent(perPage)}`;
+
+  const response = await fetchWithRateLimit(
+    url,
+    { method: 'GET', headers: buildHeaders(accessToken) },
+    limiter
+  );
+
+  await assertOk(response, `GET ${url}`);
+
+  const products = await response.json();
+  const linkHeader = response.headers.get('link') || '';
+  const hasNextPage = linkHeader.includes('rel="next"') || products.length === perPage;
+
+  return { products, hasNextPage };
+}

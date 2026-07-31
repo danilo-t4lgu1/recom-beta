@@ -39,7 +39,6 @@ import { notifyWriteFailure, notifyDailySummary } from '../src/review/notify-fai
 import { executeScheduledWrite } from '../src/review/write-executor.js';
 import { recommendForProduct } from '../src/recommendation/recommendation-engine.js';
 import { tripBreaker, setsEqual } from '../src/review/circuit-breaker.js';
-import { ALL_TAXONOMY_CATEGORY_NAMES } from '../src/ingestion/product-group.js';
 
 // Banda mínima da Defesa 1 (D-66, à discrição): o total lido hoje não pode cair
 // abaixo de 70% do último run bem-sucedido, senão trata-se de leitura truncada e
@@ -157,7 +156,7 @@ export function evaluateSnapshotIntegrity({
   return { ok: true };
 }
 
-export async function runDailyJob({ categoryNames, allowSameDayRerun = false } = {}) {
+export async function runDailyJob({ categoryNames, fullCatalog = false, allowSameDayRerun = false } = {}) {
   const existingRunId = getSuccessfulRunForToday();
 
   if (existingRunId != null && !allowSameDayRerun) {
@@ -173,7 +172,13 @@ export async function runDailyJob({ categoryNames, allowSameDayRerun = false } =
   // run recém-criado (hoje), inutilizando a comparação de banda vs. o run anterior.
   const previousSummary = getLastSuccessfulIngestionRunSummary();
 
-  const ingestionResult = await runIngestion(categoryNames ? { categoryNames } : undefined);
+  // fullCatalog (achado 2026-07-28) tem prioridade sobre categoryNames — pagina o
+  // catálogo INTEIRO da loja (sem filtro de categoria/coleção), resolvendo produtos
+  // invisíveis às 11 categorias de taxonomia originais (ex: cadastrados só em
+  // coleções novas como "EDIT"/"Novidades", sem o category_id da árvore original).
+  const ingestionResult = await runIngestion(
+    fullCatalog ? { fullCatalog: true } : categoryNames ? { categoryNames } : undefined
+  );
 
   const runId = getLatestSuccessfulRunId();
 
@@ -281,19 +286,21 @@ export async function runDailyJob({ categoryNames, allowSameDayRerun = false } =
 // executa o corpo do CLI quando o módulo é executado diretamente — importar este
 // módulo em teste NUNCA dispara chamada de rede nem grava nada no banco.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  // Sem argumentos, o job diário na nuvem ingere o CATÁLOGO COMPLETO (as 11
-  // categorias de taxonomia, D-26) — não apenas "Vestidos". Passar categorias
-  // explícitas na linha de comando continua funcionando (sobrepõe o default).
-  // A lista canônica vem de product-group.js (fonte única) para evitar digitar
-  // nomes acentuados no YAML do workflow.
-  const categoryNames =
-    process.argv.slice(2).length > 0 ? process.argv.slice(2) : ALL_TAXONOMY_CATEGORY_NAMES;
+  // Sem argumentos, o job diário na nuvem ingere o CATÁLOGO COMPLETO DA LOJA (todo
+  // produto, independente de categoria/coleção — achado 2026-07-28: as 11 categorias
+  // de taxonomia originais deixavam invisíveis produtos cadastrados só em coleções
+  // novas como "EDIT"/"Novidades"). Passar categorias explícitas na linha de comando
+  // continua funcionando (sobrepõe o default, útil para depuração pontual de uma
+  // categoria específica).
+  const explicitCategoryNames = process.argv.slice(2);
+  const fullCatalog = explicitCategoryNames.length === 0;
+  const categoryNames = fullCatalog ? undefined : explicitCategoryNames;
 
   // Bypass do guard de mesmo dia (07-08/D-64) — só o workflow_dispatch manual do
   // GitHub Actions define esta env var; o cron agendado NUNCA a define (ver YAML).
   const allowSameDayRerun = process.env.ALLOW_SAME_DAY_RERUN === 'true';
 
-  runDailyJob({ categoryNames, allowSameDayRerun })
+  runDailyJob({ categoryNames, fullCatalog, allowSameDayRerun })
     .then((result) => {
       console.log('\n=== Resumo da execução do job diário ===');
       console.log(`  skipped: ${result.skipped}`);

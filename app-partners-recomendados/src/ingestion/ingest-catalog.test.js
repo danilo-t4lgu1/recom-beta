@@ -23,12 +23,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listCategories, listProducts, getMetafields } from '../nuvemshop-client/client.js';
+import { listCategories, listProducts, listAllProducts, getMetafields } from '../nuvemshop-client/client.js';
 import { resolveMinSizesInStock } from './ingest-catalog.js';
 
 vi.mock('../nuvemshop-client/client.js', () => ({
   listCategories: vi.fn(),
   listProducts: vi.fn(),
+  listAllProducts: vi.fn(),
   getMetafields: vi.fn(),
 }));
 
@@ -75,6 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listCategories.mockResolvedValue(STORE_CATEGORIES);
   getMetafields.mockResolvedValue([]);
+  listAllProducts.mockResolvedValue({ products: [], hasNextPage: false });
 });
 
 afterEach(async () => {
@@ -261,6 +263,68 @@ describe('published + categoryCounts na ingestão (Fase 07, D-58/D-66)', () => {
     const { getLastSuccessfulIngestionRunSummary } = await import('../db/catalog-store.js');
     const summary = getLastSuccessfulIngestionRunSummary();
     expect(summary.categoryCounts).toEqual({ Blusas: 2, 'Calças': 1 });
+  });
+
+  it('runIngestion({ fullCatalog: true }) pagina o catálogo inteiro via listAllProducts, NUNCA chama listCategories/listProducts (achado 2026-07-28)', async () => {
+    // Produto real-world: cadastrado numa coleção nova ("EDIT") como PRIMEIRA
+    // categoria — a categoria de taxonomia real ("Vestidos") vem depois na lista,
+    // simulando o achado real (extractCategoryRaw já resolve por nome, buscando a
+    // primeira categoria que bate com o mapa, independente de posição/árvore).
+    const produtoEmColecaoNova = {
+      id: 'edit-1',
+      name: { pt: 'Vestido Em Coleção Nova' },
+      handle: { pt: 'vestido-em-colecao-nova' },
+      canonical_url: 'https://loja-talgui.example/vestido-em-colecao-nova',
+      tags: '',
+      attributes: [{ pt: 'Cor' }, { pt: 'Tamanho' }],
+      variants: [
+        { id: 'edit-1-v1', values: [{ pt: 'Preto' }, { pt: 'P' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
+        { id: 'edit-1-v2', values: [{ pt: 'Preto' }, { pt: 'M' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
+        { id: 'edit-1-v3', values: [{ pt: 'Preto' }, { pt: 'G' }], inventory_levels: [{ location_id: 'loc-1', stock: 5 }] },
+      ],
+      categories: [
+        { id: 39865623, name: { pt: 'EDIT' } },
+        { id: 36839648, name: { pt: 'Vestidos' } },
+      ],
+      published: true,
+    };
+    listAllProducts.mockImplementation(async ({ page }) => {
+      if (page === 1) return { products: [produtoEmColecaoNova], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runIngestion } = await import('./ingest-catalog.js');
+    const result = await runIngestion({ fullCatalog: true });
+
+    expect(result.status).toBe('success');
+    expect(result.productsRead).toBe(1);
+    expect(listCategories).not.toHaveBeenCalled();
+    expect(listProducts).not.toHaveBeenCalled();
+    expect(listAllProducts).toHaveBeenCalled();
+
+    const { getLatestSnapshotProducts } = await import('../db/catalog-store.js');
+    const rows = getLatestSnapshotProducts();
+    const found = rows.find((row) => row.productId === 'edit-1');
+    expect(found).toBeDefined();
+    expect(found.productGroupCanonical).toBe('Look Inteiro');
+  });
+
+  it('runIngestion({ fullCatalog: true }) pagina múltiplas páginas até hasNextPage:false e ignora categoryName/categoryNames quando ambos presentes', async () => {
+    const p1 = { id: 'p1', name: { pt: 'P1' }, tags: '', variants: [], categories: [{ id: 36839648, name: { pt: 'Vestidos' } }], published: true };
+    const p2 = { id: 'p2', name: { pt: 'P2' }, tags: '', variants: [], categories: [{ id: 36679147, name: { pt: 'Blusas' } }], published: true };
+    listAllProducts.mockImplementation(async ({ page }) => {
+      if (page === 1) return { products: [p1], hasNextPage: true };
+      if (page === 2) return { products: [p2], hasNextPage: false };
+      return { products: [], hasNextPage: false };
+    });
+
+    const { runIngestion } = await import('./ingest-catalog.js');
+    const result = await runIngestion({ fullCatalog: true, categoryNames: ['Blusas'] });
+
+    expect(result.productsRead).toBe(2);
+    expect(result.categoryCounts).toEqual({ 'Catálogo Completo (todas as categorias)': 2 });
+    expect(listCategories).not.toHaveBeenCalled();
+    expect(listAllProducts).toHaveBeenCalledTimes(2);
   });
 });
 

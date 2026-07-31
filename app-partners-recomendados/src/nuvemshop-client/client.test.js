@@ -12,6 +12,7 @@ import {
   updateMetafield,
   deleteMetafield,
   createMetafield,
+  listAllProducts,
 } from './client.js';
 
 describe('nuvemshop-client', () => {
@@ -145,6 +146,63 @@ describe('nuvemshop-client', () => {
       expect(captured.headers.Authorization).toBe('Bearer fake-token');
       expect(captured.headers['User-Agent']).toContain('TalguiRecomendados');
       expect(result).toEqual({ id: 1, value: '123' });
+    });
+  });
+
+  describe('listAllProducts (achado 2026-07-28 — catálogo inteiro, sem filtro de categoria)', () => {
+    it('monta a URL SEM category_id, com page/per_page corretos', async () => {
+      let captured = null;
+      globalThis.fetch = async (url) => {
+        captured = url;
+        return new Response(JSON.stringify([{ id: 1 }, { id: 2 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      };
+
+      const result = await listAllProducts({ page: 2, perPage: 50 });
+
+      expect(captured).not.toContain('category_id');
+      expect(captured).toContain('page=2');
+      expect(captured).toContain('per_page=50');
+      expect(result.products).toHaveLength(2);
+    });
+
+    it('hasNextPage é true quando o header link indica rel="next"', async () => {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify([{ id: 1 }]), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            link: '<https://api.tiendanube.com/v1/x/products?page=2>; rel="next"',
+          },
+        });
+
+      const result = await listAllProducts({ page: 1 });
+      expect(result.hasNextPage).toBe(true);
+    });
+
+    it('hasNextPage é true por fallback de tamanho de página quando o header link está ausente (Pitfall/T-02-02)', async () => {
+      const perPage = 3;
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify([{ id: 1 }, { id: 2 }, { id: 3 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+      const result = await listAllProducts({ page: 1, perPage });
+      expect(result.hasNextPage).toBe(true);
+    });
+
+    it('hasNextPage é false quando a página vem incompleta e sem header link', async () => {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify([{ id: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+      const result = await listAllProducts({ page: 1, perPage: 200 });
+      expect(result.hasNextPage).toBe(false);
     });
   });
 });
