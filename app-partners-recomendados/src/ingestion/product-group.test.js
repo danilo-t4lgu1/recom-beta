@@ -19,6 +19,7 @@ import {
   resolveProductGroup,
   crossGroupOf,
   extractCategoryRaw,
+  inferCategoryFromName,
   auditProductGroups,
   ALL_TAXONOMY_CATEGORY_NAMES,
   GROUP_LOOK_INTEIRO,
@@ -135,6 +136,89 @@ describe('extractCategoryRaw', () => {
     expect(() => extractCategoryRaw(null)).not.toThrow();
     expect(() => extractCategoryRaw(undefined)).not.toThrow();
     expect(() => extractCategoryRaw({})).not.toThrow();
+  });
+
+  it('infere pelo nome quando o produto só está em coleção promocional sem tag de categoria-folha (achado real 2026-08-06)', () => {
+    // Reproduz o achado ao vivo: "Vestido Regina Com Fenda Preto" só tinha a
+    // categoria "Últimas Oportunidades" (nenhuma categoria de taxonomia D-26).
+    const product = {
+      name: { pt: 'Vestido Regina Com Fenda Preto' },
+      categories: [{ id: 1, name: { pt: 'Últimas Oportunidades' } }],
+    };
+    expect(extractCategoryRaw(product)).toBe('Vestidos');
+    expect(resolveProductGroup(extractCategoryRaw(product))).toBe(GROUP_LOOK_INTEIRO);
+  });
+
+  it('infere pelo nome mesmo quando categories está vazio/ausente (produto pode não ter categoria nenhuma)', () => {
+    expect(extractCategoryRaw({ name: { pt: 'Calça Taty' } })).toBe('Calças');
+    expect(extractCategoryRaw({ name: { pt: 'Saia Manuela' }, categories: [] })).toBe('Saias');
+  });
+
+  it('categoria real da API sempre tem prioridade sobre a inferência por nome', () => {
+    // Nome ambíguo/enganoso não deve sobrepor uma categoria de taxonomia já
+    // presente e resolvível na API.
+    const product = {
+      name: { pt: 'Vestido (na verdade é uma Blusa cross-sell)' },
+      categories: [{ id: 1, name: { pt: 'Blusas' } }],
+    };
+    expect(extractCategoryRaw(product)).toBe('Blusas');
+  });
+
+  it('tipo fora da taxonomia fechada (ex: "Body") permanece null mesmo com o fallback de nome — nunca inventa categoria', () => {
+    const product = {
+      name: { pt: 'Body Cristiane' },
+      categories: [{ id: 1, name: { pt: 'Sold out' } }],
+    };
+    expect(extractCategoryRaw(product)).toBe('Sold out');
+    expect(resolveProductGroup(extractCategoryRaw(product))).toBeNull();
+  });
+});
+
+describe('inferCategoryFromName', () => {
+  it('resolve a primeira palavra do nome para a categoria de taxonomia correspondente (com e sem acento)', () => {
+    expect(inferCategoryFromName('Vestido Regina Com Fenda Preto')).toBe('Vestidos');
+    expect(inferCategoryFromName('Calça Taty')).toBe('Calças');
+    expect(inferCategoryFromName('Calca Taty')).toBe('Calças');
+    expect(inferCategoryFromName('Macacão Aline')).toBe('Macacões');
+    expect(inferCategoryFromName('Macacao Aline')).toBe('Macacões');
+    expect(inferCategoryFromName('Macaquinho Bia')).toBe('Macaquinhos');
+    expect(inferCategoryFromName('Blusa Iza')).toBe('Blusas');
+    expect(inferCategoryFromName('Cropped Duda')).toBe('Croppeds');
+    expect(inferCategoryFromName('Corset Denise')).toBe('Corsets');
+    expect(inferCategoryFromName('Camisa Danila')).toBe('Camisas e Coletes');
+    expect(inferCategoryFromName('Colete Sara')).toBe('Camisas e Coletes');
+    expect(inferCategoryFromName('Blazer Nina')).toBe('Blazers e Jaquetas');
+    expect(inferCategoryFromName('Jaqueta Vera')).toBe('Blazers e Jaquetas');
+    expect(inferCategoryFromName('Short Mel')).toBe('Shorts');
+    expect(inferCategoryFromName('Saia Manuela')).toBe('Saias');
+  });
+
+  it('resolve a forma PLURAL do primeiro nome quando o catálogo real usa plural (achado ao vivo: 110 produtos "Shorts X")', () => {
+    expect(inferCategoryFromName('Shorts Verão Listrado')).toBe('Shorts');
+    expect(inferCategoryFromName('Vestidos Kit Duplo')).toBe('Vestidos');
+    expect(inferCategoryFromName('Calças Cargo Bege')).toBe('Calças');
+  });
+
+  it('todo valor retornado é uma entrada EXATA de ALL_TAXONOMY_CATEGORY_NAMES (guarda contra drift)', () => {
+    const samples = [
+      'Vestido X', 'Macacao Y', 'Macaquinho Z', 'Blusa A', 'Cropped B', 'Corset C',
+      'Camisa D', 'Colete E', 'Blazer F', 'Jaqueta G', 'Calca H', 'Short I', 'Saia J',
+    ];
+    for (const name of samples) {
+      expect(ALL_TAXONOMY_CATEGORY_NAMES).toContain(inferCategoryFromName(name));
+    }
+  });
+
+  it('retorna null (nunca lança) para tipo fora da taxonomia, nome ausente ou entrada malformada', () => {
+    expect(inferCategoryFromName('Body Cristiane')).toBeNull();
+    expect(inferCategoryFromName('Lenço Floral')).toBeNull();
+    expect(inferCategoryFromName(null)).toBeNull();
+    expect(inferCategoryFromName(undefined)).toBeNull();
+    expect(inferCategoryFromName('')).toBeNull();
+    expect(inferCategoryFromName('   ')).toBeNull();
+    expect(inferCategoryFromName(42)).toBeNull();
+    expect(() => inferCategoryFromName(null)).not.toThrow();
+    expect(() => inferCategoryFromName(undefined)).not.toThrow();
   });
 });
 

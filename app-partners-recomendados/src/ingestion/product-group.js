@@ -117,6 +117,75 @@ export function crossGroupOf(group) {
   return null;
 }
 
+// Fallback por NOME do produto (achado real 2026-08-06): quando um produto é
+// movido para uma coleção promocional/de vitrine (ex: "Últimas Oportunidades",
+// "Select", "Sold out", "EDIT") e perde a tag de categoria-folha original, NENHUMA
+// categoria retornada pela API resolve a um grupo conhecido — o produto cai no
+// fallback de categoria bruta (abaixo) e o motor fail-closa (0 recomendações),
+// mesmo sendo um produto real e elegível. Confirmado ao vivo: 637+ produtos reais
+// (ex: "Vestido Regina Com Fenda Preto", só na coleção "Últimas Oportunidades")
+// nesse estado. Convenção observada nos produtos reais inspecionados: o nome
+// SEMPRE começa pelo tipo de peça ("Vestido X", "Calça Y", "Saia Z") — mas a
+// forma (singular/plural) VARIA por categoria no catálogo real (confirmado ao
+// vivo: 110 produtos reais começam com "Shorts X", plural, não "Short X"), por
+// isso o vocabulário cobre singular E plural de cada uma das 11 categorias de
+// ALL_TAXONOMY_CATEGORY_NAMES — nunca inventa categoria fora do mapa fechado D-26
+// (um tipo fora da taxonomia, ex: "Body", "Lenço", "Regata", "Casaco", continua
+// null aqui de propósito — é decisão de negócio pendente, não inferência de
+// código, T-03.1-02).
+const NAME_KEYWORD_TO_CATEGORY = new Map([
+  ['vestido', 'Vestidos'],
+  ['vestidos', 'Vestidos'],
+  ['macacao', 'Macacões'],
+  ['macacoes', 'Macacões'],
+  ['macaquinho', 'Macaquinhos'],
+  ['macaquinhos', 'Macaquinhos'],
+  ['blusa', 'Blusas'],
+  ['blusas', 'Blusas'],
+  ['cropped', 'Croppeds'],
+  ['croppeds', 'Croppeds'],
+  ['corset', 'Corsets'],
+  ['corsets', 'Corsets'],
+  ['camisa', 'Camisas e Coletes'],
+  ['camisas', 'Camisas e Coletes'],
+  ['colete', 'Camisas e Coletes'],
+  ['coletes', 'Camisas e Coletes'],
+  ['blazer', 'Blazers e Jaquetas'],
+  ['blazers', 'Blazers e Jaquetas'],
+  ['jaqueta', 'Blazers e Jaquetas'],
+  ['jaquetas', 'Blazers e Jaquetas'],
+  ['calca', 'Calças'],
+  ['calcas', 'Calças'],
+  ['short', 'Shorts'],
+  ['shorts', 'Shorts'],
+  ['saia', 'Saias'],
+  ['saias', 'Saias'],
+]);
+
+/**
+ * Infere a categoria de taxonomia (D-26) pela PRIMEIRA PALAVRA do nome do
+ * produto, quando nenhuma `categories[]` da API resolve (ver `extractCategoryRaw`).
+ * Resolução por IGUALDADE EXATA da primeira palavra normalizada (sem acento via
+ * NFD, minúsculas) contra o vocabulário fechado acima — mesmo princípio de
+ * `resolveProductGroup` (nunca fuzzy/substring, ao contrário de
+ * `fabric-taxonomy.js`/D-32, porque aqui também é resolução para um enum
+ * fechado). Retorna `null` (nunca lança) quando o nome está ausente ou a
+ * primeira palavra não bate com nenhum tipo conhecido — preserva fail-closed
+ * para tipos genuinamente fora da taxonomia (T-03.1-02).
+ * @param {string|*} productName tipicamente `product.name.pt`
+ * @returns {string|null} nome EXATO de uma entrada de ALL_TAXONOMY_CATEGORY_NAMES, ou null
+ */
+export function inferCategoryFromName(productName) {
+  if (typeof productName !== 'string') return null;
+  const firstWord = productName.trim().split(/\s+/)[0];
+  if (!firstWord) return null;
+  const normalized = firstWord
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
+  return NAME_KEYWORD_TO_CATEGORY.get(normalized) ?? null;
+}
+
 /**
  * Extrai a categoria bruta (`name.pt`) do shape real de produto retornado
  * pela API pública da Nuvemshop (`product.categories[0].name.pt`), com
@@ -124,14 +193,13 @@ export function crossGroupOf(group) {
  * shape completo presente — mesma convenção defensiva de
  * `findAttributeIndex`/`extractVariantValueByAttributeName` em
  * `ingest-catalog.js`. Retorna `null` em qualquer ponto de falha (produto
- * ausente, `categories` ausente/vazio, primeiro elemento sem `name.pt`
- * string).
+ * ausente, `categories` ausente/vazio E nome não infere, primeiro elemento
+ * sem `name.pt` string).
  * @param {object|*} product objeto produto no shape da API pública
  * @returns {string|null}
  */
 export function extractCategoryRaw(product) {
-  const categories = product?.categories;
-  if (!Array.isArray(categories) || categories.length === 0) return null;
+  const categories = Array.isArray(product?.categories) ? product.categories : [];
 
   // A API pública da Nuvemshop retorna MÚLTIPLAS categorias por produto, e a
   // PRIMEIRA é tipicamente uma categoria de navegação/raiz ("Todos os
@@ -141,9 +209,7 @@ export function extractCategoryRaw(product) {
   // `categories[0]` fazia 100% dos produtos resolverem para grupo nulo (o motor
   // então fail-closava e devolvia 0 recomendações para o catálogo inteiro).
   // Correção: procurar a PRIMEIRA categoria cujo nome resolve para um grupo
-  // conhecido; só cair em `categories[0]` (grafia bruta) quando NENHUMA resolve,
-  // para que `auditProductGroups` continue enxergando a categoria bruta de
-  // produtos genuinamente fora do mapa (Pitfall 3, comportamento preservado).
+  // conhecido.
   for (const category of categories) {
     const name = category?.name?.pt;
     if (typeof name === 'string' && resolveProductGroup(name) != null) {
@@ -151,6 +217,17 @@ export function extractCategoryRaw(product) {
     }
   }
 
+  // Nenhuma categoria da API resolveu — tenta inferir pelo NOME do produto
+  // (achado 2026-08-06, ver NAME_KEYWORD_TO_CATEGORY acima) ANTES de cair no
+  // fallback de categoria bruta. Roda mesmo quando `categories` está vazio/
+  // ausente (produto pode ter nome válido sem nenhuma categoria anexada).
+  const inferredFromName = inferCategoryFromName(product?.name?.pt);
+  if (inferredFromName != null) return inferredFromName;
+
+  // Fallback final: primeira categoria crua, só para `auditProductGroups`
+  // continuar enxergando produtos genuinamente fora do mapa (Pitfall 3,
+  // comportamento preservado).
+  if (categories.length === 0) return null;
   const firstName = categories[0]?.name?.pt;
   if (typeof firstName !== 'string') return null;
   return firstName.trim();
