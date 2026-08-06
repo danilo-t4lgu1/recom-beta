@@ -219,13 +219,20 @@
     return '<div class="item-sizes rec-sizes">' + chips + '</div>';
   }
 
-  function buildSlideHtml(product) {
+  function buildSlideHtml(product, index) {
     var safeUrl = escapeHtml(product.url);
     var safeName = escapeHtml(product.name);
     var safeImage = product.image ? escapeHtml(product.image) : null;
 
+    // Primeiro slide nunca usa loading="lazy": e o unico com chance real de ser
+    // o elemento LCP da PDP (o bloco carrega cedo via evento onfirstinteraction,
+    // que dispara com scroll/clique/toque — nao so apos o load completo da
+    // pagina). Lazy nesse slide especifico atrasa o fetch mesmo com a imagem no
+    // viewport. Slides seguintes permanecem lazy (genuinamente fora da tela
+    // inicial do carrossel).
+    var loadingAttr = index === 0 ? ' loading="eager" fetchpriority="high"' : ' loading="lazy"';
     var imageHtml = safeImage
-      ? '<img class="rec-img" src="' + safeImage + '" alt="' + safeName + '" loading="lazy">'
+      ? '<img class="rec-img" src="' + safeImage + '" alt="' + safeName + '"' + loadingAttr + '>'
       : '';
 
     return (
