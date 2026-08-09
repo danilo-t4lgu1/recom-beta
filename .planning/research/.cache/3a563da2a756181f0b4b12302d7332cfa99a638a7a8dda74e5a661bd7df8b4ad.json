@@ -1,0 +1,1 @@
+{"content":"Metafields: namespace/key must start with letter, alphanumeric+underscore only; no documented char limits on value; no documented quota per resource/store; PUT only updates value+description.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-08T19:05:05.549Z","ttl":86400000,"kind":"web"}

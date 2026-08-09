@@ -1,0 +1,1 @@
+{"content":"Discord webhook minimal payload: POST JSON body {\"content\": \"message\"} to the webhook URL, Content-Type: application/json. Success returns HTTP 204 no body. content field max 2000 chars.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-16T15:46:11.697Z","ttl":86400000,"kind":"web"}

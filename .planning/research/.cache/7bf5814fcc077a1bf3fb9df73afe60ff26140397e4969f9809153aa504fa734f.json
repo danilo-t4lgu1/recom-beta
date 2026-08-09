@@ -1,0 +1,1 @@
+{"content":"Standard automation safety pattern: versioned snapshots taken on every change, audit logs record trigger/timestamp/from-version/to-version, rollback restores prior state; CI/CD tools auto-trigger rollback on failure signals.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-08T19:02:34.942Z","ttl":86400000,"kind":"web"}

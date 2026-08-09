@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-09T15:07:11Z",
+  "phase": "none",
+  "phase_name": "painel-administrativo-recom-e-talgui-app-center (fora do roadmap GSD)",
+  "phase_dir": null,
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "done",
+  "completed_tasks": [
+    { "id": 1, "name": "Painel do Recom: backend (admin-dashboard.js + admin-server.js) + testes", "status": "done" },
+    { "id": 2, "name": "Painel do Recom: front React+Vite (web/) consumindo /api/dashboard", "status": "done" },
+    { "id": 3, "name": "Painel do Recom: deploy Vercel separado (recom-admin), git-conectado, Basic Auth", "status": "done" },
+    { "id": 4, "name": "Painel do Recom: verificado end-to-end em produção com dado real", "status": "done" },
+    { "id": 5, "name": "daily-recompute.yml: sincroniza catalog.db vendorizado no commit-back diário", "status": "done" },
+    { "id": 6, "name": "Talgui App Center: scaffold React+Vite (drawer + cards)", "status": "done" },
+    { "id": 7, "name": "Talgui App Center: repo GitHub criado, código pushado", "status": "done" },
+    { "id": 8, "name": "Talgui App Center: projeto Vercel criado, git-conectado, Basic Auth configurado", "status": "done", "progress": "deploy READY em produção (2026-08-09, retomada) apos corrigir a causa raiz do bloqueio -- ver id 9" },
+    { "id": 9, "name": "Verificar/desbloquear deploy do talgui-app-center no dashboard Vercel", "status": "done", "progress": "causa raiz: Deployment Blocked por e-mail de autor de commit invalido (danilo.prado@talgui.b, faltava com.br) -- nao era Deployment Protection nem problema de build/dependencias. git config corrigido (local+global), commit vazio 7c3acc0 com autoria correta, push normal, vercel --prod ficou READY em ~3s. Ver D-74 em PROJECT.md." },
+    { "id": 10, "name": "Testar Basic Auth + navegação do card Recom no App Center deployado", "status": "done", "progress": "confirmado via curl: 401 sem credencial, 401 credencial errada, 200 credencial certa, HTML da SPA carregando corretamente em https://talgui-app-center.vercel.app" }
+  ],
+  "remaining_tasks": [],
+  "blockers": [],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Guardar as 2 senhas geradas nesta sessão num gerenciador de senhas",
+      "context": "Valores redigidos deste arquivo em 2026-08-09 (achado de segurança: repo recom-beta é público no GitHub). recom-admin: usuário talgui, senha em ADMIN_BASIC_AUTH_PASSWORD (projeto Vercel recom-admin). talgui-app-center: usuário talgui, senha em ADMIN_BASIC_AUTH_PASSWORD (projeto Vercel talgui-app-center). A Vercel é hoje a única fonte de verdade.",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    { "decision": "D-71: painel do Recom em projeto Vercel SEPARADO (recom-admin), não no projeto público app-partners-recomendados", "rationale": "Endpoint público /api/recommendations/:id é consumido ao vivo sem login pelo storefront; protegê-lo quebraria produção real", "phase": "none" },
+    { "decision": "D-72: proteção via Basic Auth em Edge Middleware próprio, não o toggle nativo Vercel Authentication", "rationale": "Toggle 'All Deployments' (cobre aliases .vercel.app, não só URLs com hash) é Pro-only; plano atual é Hobby", "phase": "none" },
+    { "decision": "D-73: catalog-store.js/schema.sql/admin-dashboard.js/catalog.db vendorizados como cópias COMMITADAS dentro de web/, não geradas no build da Vercel", "rationale": "Vercel não expõe arquivos fora da Root Directory do projeto durante o build; import relativo pra fora falha silenciosamente", "phase": "none" },
+    { "decision": "D-74: causa raiz do deploy travado do talgui-app-center era Deployment Blocked por e-mail de autor de commit invalido, nao Deployment Protection/build", "rationale": "CLI da Vercel exibia UNKNOWN/Building indefinidamente em vez do status real Blocked, mascarando a causa -- so apareceu no dashboard web", "phase": "none" }
+  ],
+  "uncommitted_files": [],
+  "next_action": "CONCLUIDO 2026-08-09 (retomada pos-migracao de conta): causa raiz era Deployment Blocked por e-mail de autor de commit invalido (nao Deployment Protection nem build) -- ver D-74 em PROJECT.md. git config corrigido, commit vazio com autoria correta, deploy READY em ~3s, Basic Auth confirmada em producao (401 sem credencial, 401 credencial errada, 200 credencial certa -- valor da senha em ADMIN_BASIC_AUTH_PASSWORD na Vercel, nunca em texto puro aqui). Nao afeta o gate pendente da Fase 9 (validacao do cron 06:00 UTC), que continua em aberto separadamente.",
+  "context_notes": "Sessão ad-hoc (EnterPlanMode), não passou por gsd-plan-phase. Todas as decisões de arquitetura foram validadas empiricamente (testado com curl/vercel CLI contra produção real), não são suposições. git push e leitura de ~/.vercel auth.json foram bloqueados pelo classificador de segurança do ambiente algumas vezes — usuário rodou git push manualmente quando isso aconteceu; não é um padrão a 'contornar' na próxima sessão, é comportamento esperado do ambiente."
+}

@@ -1,0 +1,1 @@
+{"content":"Slack incoming webhook minimal payload: POST JSON body {\"text\": \"message\"} to the webhook URL with Content-Type: application/json. Missing text field returns no_text error.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-16T15:46:11.498Z","ttl":86400000,"kind":"web"}

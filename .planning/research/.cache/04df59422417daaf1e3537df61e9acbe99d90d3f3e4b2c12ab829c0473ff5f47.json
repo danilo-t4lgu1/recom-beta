@@ -1,0 +1,1 @@
+{"content":"Rate limit: leaky bucket 2 req/s, burst 40; Next/Evolution plans reportedly x10 (20 req/s, burst 400) per one source, contradicts PROJECT.md stated constraint of 2 req/s buffer 40 -- needs live verification via response headers.","source":"web","provider":"websearch","confidence":"LOW","fetched_at":"2026-07-08T19:05:05.403Z","ttl":86400000,"kind":"web"}

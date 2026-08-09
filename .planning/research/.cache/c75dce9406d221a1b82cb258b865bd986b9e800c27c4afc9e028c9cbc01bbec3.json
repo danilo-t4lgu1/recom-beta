@@ -1,0 +1,1 @@
+{"content":"variant.stock deprecated in favor of inventory_levels[] per-location array; stock availability now requires summing across locations; has_stock field undocumented in multi-inventory context.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-08T19:05:05.702Z","ttl":86400000,"kind":"web"}

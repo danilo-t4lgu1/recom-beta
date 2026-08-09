@@ -1,0 +1,1 @@
+{"content":"Pagination via Link header (rel=next/last/first/prev) plus x-total-count header. per_page max is 200, default page size unpaginated unless page param used. Page numbers start at 1.","source":"web","provider":"webfetch","confidence":"MEDIUM","fetched_at":"2026-07-10T17:54:20.065Z","ttl":86400000,"kind":"docs"}
