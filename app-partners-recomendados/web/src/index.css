@@ -1,0 +1,308 @@
+:root {
+  color-scheme: light;
+
+  /* Paleta "ateliê" — greige neutro, tinta quase-preta, dourado de linha de
+     costura como acento primário, verde-sálvia (ok) e terracota (atenção)
+     usados só como cor de status, nunca como acento decorativo. */
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --surface-sunken: #f0eee7;
+  --ink: #1f2421;
+  --ink-muted: #5b6560;
+  --line: #ddd8cc;
+  --accent-gold: #b98a2e;
+  --accent-gold-soft: #f1e4c8;
+  --ok: #2f6f62;
+  --ok-soft: #e2efe9;
+  --alert: #b1502a;
+  --alert-soft: #f6e5dc;
+
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 100% 0%, #fbfaf7 0%, transparent 45%),
+    var(--bg);
+}
+
+a {
+  color: inherit;
+}
+
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+/* ---------- Cabeçalho ---------- */
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 1.75rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.masthead h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.masthead .eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 0.35rem;
+}
+
+.cron-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+.status-dot[data-status='success'] {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+.status-dot[data-status='failed'],
+.status-dot[data-status='running'] {
+  background: var(--alert);
+  box-shadow: 0 0 0 3px var(--alert-soft);
+}
+
+/* ---------- Grid de etiquetas (swing tags) ---------- */
+
+.tag-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+@media (max-width: 860px) {
+  .tag-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .tag-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tag {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.4rem 1.1rem 1.1rem;
+  clip-path: polygon(18px 0, 100% 0, 100% 100%, 0 100%, 0 18px);
+  opacity: 0;
+  transform: translateY(6px);
+  animation: tag-in 0.5s ease forwards;
+}
+
+.tag::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-gold);
+  background: var(--bg);
+}
+
+.tag .tag-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px dashed var(--line);
+}
+
+.tag .tag-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 1.85rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  display: block;
+}
+
+.tag .tag-value small {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 1rem;
+  color: var(--ink-muted);
+}
+
+.tag .tag-sub {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.tag .tag-sub strong {
+  color: var(--alert);
+  font-weight: 600;
+}
+
+.tag[data-tone='ok'] .tag-value {
+  color: var(--ok);
+}
+
+.tag[data-tone='alert'] .tag-value {
+  color: var(--alert);
+}
+
+@keyframes tag-in {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tag {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- Lista de estoque zerado ---------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-sunken);
+}
+
+.panel-header h2 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-header .count {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--alert);
+}
+
+.stock-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.stock-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.stock-list li:last-child {
+  border-bottom: none;
+}
+
+.stock-list .product-id {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.stock-list .stock-badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--alert-soft);
+  color: var(--alert);
+  flex-shrink: 0;
+}
+
+.panel-empty {
+  padding: 1.5rem 1.25rem;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+/* ---------- Estados de carregamento / erro ---------- */
+
+.state-message {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.state-message.is-error {
+  color: var(--alert);
+}
