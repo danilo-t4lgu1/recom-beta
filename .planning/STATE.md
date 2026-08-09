@@ -141,9 +141,9 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 
 ## Session
 
-**Last session:** 2026-08-09T15:07:11Z
-**Stopped at:** Painel administrativo do Recom + Talgui App Center (trabalho fora do roadmap GSD, pausado para migracao de conta) — ver `.planning/.continue-here.md` para handoff completo
-**Resume file:** .planning/.continue-here.md
+**Last session:** 2026-08-09 (retomada pos-migracao de conta)
+**Stopped at:** Fase 9 (Dashboard GA4) formalmente ADIADA para milestone futuro (decisao do usuario) — deploy do Talgui App Center resolvido e verificado em producao (D-74), `.planning/` versionado no git apos redacao de credenciais. Nenhum trabalho GSD ativo em andamento no momento.
+**Resume file:** .planning/ROADMAP.md (nota na Fase 9) e .planning/PROJECT.md (Key Decisions)
 
 Sessao 2026-08-09 (fora dos planos GSD, nao bloqueia Fase 9 — trabalho paralelo pedido
 diretamente pelo usuario): construido painel administrativo web do Recom (contagem de
@@ -155,12 +155,18 @@ Deployments" e Pro-only). App Center criado e deployado mas com um deploy penden
 confirmacao no dashboard da Vercel. Handoff completo com credenciais, decisoes e
 proximo passo exato em `.planning/.continue-here.md`.
 
-Ainda pendente da sessao anterior (2026-07-23), gate explicito do usuario, NAO
-resolvido nesta sessao: confirmar se o cron agendado das 06:00 UTC rodou com sucesso
-apos o fix de retry (commit a8ce961) — checar (1) GitHub Actions run do dia (schedule,
-nao workflow_dispatch), (2) write_log/`/audit` para escritas reais registradas, (3)
-resumo no Slack via notifyDailySummary. So depois dessa confirmacao seguir para
-qualquer trabalho da Fase 9 (Dashboard GA4).
+Sessao 2026-08-09 (retomada pos-migracao de conta), decisao de priorizacao do usuario:
+Fase 9 (Dashboard GA4) formalmente ADIADA para um milestone futuro — ver nota na secao
+da Fase 9 em ROADMAP.md. Racional explicito do usuario: o tempo de atividade do bloco
+Recomendados ainda e curto demais para que dados de atribuicao GA4 sejam validos, e a
+prioridade agora e o painel administrativo (Recom + Talgui App Center, ja concluido em
+producao) e o desenvolvimento de outros aplicativos do ecossistema Talgui (fora deste
+repositorio). Pesquisa ja feita (09-RESEARCH.md) preservada para quando a fase for
+retomada. Nao remove nem invalida nenhuma decisao (D-71 a D-86) ja registrada em
+09-CONTEXT.md/09-RESEARCH.md.
+
+Gate do cron (pendencia da sessao 2026-07-23) foi RESOLVIDO em 2026-07-24 — ver
+pendencias abaixo, item atualizado.
 
 Trabalho feito nesta sessao (fora dos planos GSD, ja em producao/commitado no master):
 
@@ -177,7 +183,7 @@ Pendencias:
 - [RESOLVIDO Fase 07/07-05] Fluxo recorrente de re-gravacao: job diario agora calcula E grava automaticamente (D-61/D-68), guardado por kill switch/disjuntor/Defesas 1-2.
 - [RESOLVIDO Fase 07/07-07] Limpar temporarios: _batch-write.js e _scope.js removidos.
 - Cache da Nuvemshop/navegador: apos publicar nova versao do script ou gravar Metafield, a propagacao no storefront pode levar alguns minutos; cache de sessionStorage do visitante (24h, D-50) tambem pode mascarar atualizacao recente — testar em aba anonima.
-- **[ATUALIZADA 2026-07-23, BLOQUEIA FASE 9] Validar o regime diario automatico (cron) com evidencia duravel em logs**: cron agendado (run #16, 2026-07-23 12:11 UTC) FALHOU com 502 Bad Gateway transitorio da Cloudflare/Tiendanube durante GET /metafields/products (leitura, antes de qualquer escrita) — fetchWithRateLimit so tinha retry para 429, nao para 5xx/erro de rede. Corrigido e no ar: commit a8ce961 (retry com backoff exponencial 500ms/1s/2s, ate 3 tentativas, para 502/503/504 e erro de rede), pushado para master. Webhook de alerta de falha (WRITE_FAILURE_WEBHOOK_URL, Slack) configurado pelo usuario no mesmo dia — antes disso, falhas do cron nao notificavam ninguem. GATE EXPLICITO DO USUARIO: aguardar o cron agendado de amanha (06:00 UTC, 2026-07-24) rodar com sucesso E confirmar evidencia duravel (write_log/`/audit`, resumo no Slack via notifyDailySummary) antes de iniciar o desenvolvimento do front-end do Dashboard (Fase 9). Usuario recusou disparo manual (workflow_dispatch) para validar mais cedo — prefere esperar o ciclo natural do schedule. NAO iniciar Fase 9 sem essa confirmacao.
+- **[RESOLVIDO 2026-07-24] Validar o regime diario automatico (cron) com evidencia duravel em logs**: cron agendado (run #16, 2026-07-23 12:11 UTC) tinha FALHADO com 502 Bad Gateway transitorio da Cloudflare/Tiendanube durante GET /metafields/products — corrigido pelo commit a8ce961 (retry com backoff exponencial). Confirmado via GitHub Actions API (run 30091364329, 2026-07-24 11:57 UTC, status success, todas as etapas verdes incluindo commit-back) e por leitura direta do `data/catalog.db` puxado (run #8, 1773 produtos). Cron seguiu rodando com sucesso nos dias seguintes (25, 26, 27, 28/07). Gate do usuario satisfeito — Fase 9 (Dashboard GA4) ficou desbloqueada tecnicamente por este item (depois adiada por outro motivo, ver Roadmap Evolution/nota de 2026-08-09).
 - **[NOVA 2026-07-23, adiada pelo usuario] 30 produtos publicados sem tag de categoria-folha + categoria nova "Lencos" fora do fechamento D-26**: ao criar colecoes novas no admin (Iconic Collection/Inverno Iconic/Wedding/Select/Novidades da Semana/Ultimas Oportunidades), 30 produtos existentes (ex: Blusa Iza, Corset Denise, Saia Manuela, Camisa Danila, Calca Taty, Body Cristiane) perderam a tag da categoria-folha original (Blusas/Corsets/Saias/Camisas e Coletes/Calcas) — como a ingestao le por categoria-folha (as 11 da taxonomia), esses produtos ficam INVISIVEIS para todo o pipeline (nunca lidos, 0 recomendacoes, nunca recomendados a ninguem). Separadamente, "Lencos" (lencos/acessorio, 4 produtos publicados) e um tipo de produto novo fora dos 3 grupos fechados (Look Inteiro/Partes de Cima/Partes de Baixo) — precisa de decisao de negocio (entra em Partes de Cima como acessorio, ou fica fora do motor?). NAO e bug de codigo — e dado de catalogo/categorizacao. Usuario pediu para desconsiderar por ora e focar na validacao do cron primeiro; retomar quando ele sinalizar.
 - **[NOVA] Reapertar MIN_SIZES_IN_STOCK para >=3 quando o estoque aumentar**: hoje configurado como 1 (repository variable no GitHub Actions) por estarmos em Acao Promocional — intencional e correto por enquanto. Reverter (apagar a variavel, ausencia => default 3 em resolveMinSizesInStock) quando o estoque normalizar.
 
@@ -192,6 +198,7 @@ Pendencias:
 - Phase 7 added (2026-07-20) [PRIORIDADE]: Rollout do motor no catalogo completo (todas as categorias em estoque) + validacao de cobertura + fluxo recorrente de re-gravacao. PENDENTE de execucao. So Vestidos (304 produtos) gravados ate agora; faltam Macacoes/Macaquinhos/Blusas/Croppeds/Corsets/Camisas e Coletes/Blazers e Jaquetas/Calcas/Shorts/Saias. Scripts prototipados: app-partners-recomendados/scripts/_batch-write.js (modo all-catalog, via executeApprovedWrite, reversivel por rollback.js) e _scope.js (previa de escopo) — temporarios.
 - Phase 8 added (2026-07-20): App de vitrine de Recomendados no storefront (carrossel + preco promocional + grade de tamanhos + preview). A MAIOR PARTE JA FOI CONSTRUIDA E ESTA EM PRODUCAO nesta sessao — v9 do script no Partners (id 8195), endpoint devolve lista de ate 8, Vercel com deploy automatico, estilos via <style> injetado. Tratar no plan-phase como DOCUMENTAR/VERIFICAR o que existe, nao construir do zero.
 - Phase 9 added (2026-07-22): Dashboard de Metricas Reais via GA4 (visualizacoes/carrinho/receita/conversao do bloco Recomendados) — objetivo do usuario e comprovar com dados reais que o projeto sustenta aumento de conversao/receita, nao estimar. Viabilidade tecnica confirmada (leitura direta do codigo: zero integracao de analytics hoje), MAS sem dados retroativos — atribuicao so existe a partir da instrumentacao de eventos GA4 (item_list_name="Recomendados") no storefront-script. TBD ate confirmar se GA4 ja esta instalado na loja e se ha acesso admin para criar conta de servico Google Cloud (leitura via Data API).
+- Phase 9 ADIADA para milestone futuro (2026-08-09, retomada pos-migracao de conta): decisao explicita do usuario — priorizar o painel administrativo (Recom + Talgui App Center, ja concluido em producao fora deste roadmap) e o desenvolvimento de outros aplicativos do ecossistema Talgui, em vez de continuar a Fase 9 agora. Racional: tempo de atividade do bloco Recomendados ainda curto demais para dados de atribuicao GA4 serem validos/consideraveis. Nao invalida a pesquisa/decisoes ja feitas (09-RESEARCH.md, D-71 a D-86 em 09-CONTEXT.md) — preservadas para quando a fase for retomada.
 - Phase 10 added (2026-07-22): Migracao para NubeSDK — decisao do proprio usuario (nao imposta), com prazo regulatorio confirmado por pesquisa (dev.nuvemshop.com.br): bloqueio de novas instalacoes de Script legado em 30/08/2026, remocao progressiva a partir de 30/10/2026. Prioridade explicita do usuario: validar motor+cron diario via NubeSDK PRIMEIRO, front-end DEPOIS. Risco identificado: apps NubeSDK renderizam UI em "slots pre-definidos" (Web Workers, sem DOM direto) — posicionamento exato do carrossel da Fase 8 pode nao ser 1:1 portavel; Morelia e tema oficial da Nuvemshop (favorece suporte mais rapido). Plano B se o NubeSDK for limitado demais: FTP/codigo-fonte via plano Impulso (~R$164/mes) para colar a tag do script direto no template do tema, independente do mecanismo de app da Nuvemshop. Projeto permanece rotulado Beta ate comprovacao pos-migracao em producao real.
 
 ### Blockers

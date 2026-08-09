@@ -283,7 +283,7 @@ Plans:
 
 - [ ] TBD (run /gsd-plan-phase 8 to break down)
 
-### Phase 9: Dashboard de Métricas Reais (GA4) — visualizações, carrinho, receita e conversão do bloco Recomendados
+### Phase 9: Dashboard de Métricas Reais (GA4) — visualizações, carrinho, receita e conversão do bloco Recomendados [ADIADA para milestone futuro — ver nota 2026-08-09]
 
 **Goal:** [To be planned] — instrumentar o storefront-script com eventos GA4 Enhanced Ecommerce (`view_item_list`/`select_item`/`add_to_cart` marcados com `item_list_name="Recomendados"`) e construir um dashboard de leitura via Google Analytics Data API (GA4) que isole visualizações, adições ao carrinho, receita e conversão atribuíveis especificamente ao bloco Recomendados — permitindo comprovar com dados reais (não estimativa) o impacto do projeto na conversão/receita da Talgui.
 **Requirements**: TBD
@@ -292,9 +292,13 @@ Plans:
 
 **Nota de viabilidade (2026-07-22):** tecnicamente viável, confirmado por leitura direta do código (zero integração de analytics existente hoje — `gtag`/`dataLayer`/GA4 ausentes em todo o storefront-script e endpoints). **Sem dados retroativos** — a atribuição só passa a existir a partir do dia em que os eventos forem instrumentados; não há como reconstruir atribuição de tráfego passado. Pré-requisitos a confirmar antes de planejar: (1) GA4 já está configurado/instalado na loja Talgui (`gtag.js` presente no tema); (2) acesso admin ao GA4 para criar uma conta de serviço Google Cloud com permissão de leitura (Viewer) na propriedade, usada pela Data API.
 
+**Pesquisa já feita (não perder ao retomar):** `09-RESEARCH.md` cobre instrumentação gtag (HIGH confidence), detecção de add_to_cart via ponte sessionStorage (MEDIUM/LOW, precisa checkpoint ao vivo no tema Morelia real), stack (`google-auth-library` + REST), proteção do dashboard (token + `timingSafeEqual`), e um achado crítico: GA4 não atribui receita automaticamente a um `item_list_name` em eventos futuros da sessão — o escopo foi expandido (D-85/D-86 em `09-CONTEXT.md`) para incluir um segundo Script Nuvemshop no checkout, mas a pesquisa complementar sobre esse mecanismo específico falhou por timeout e nunca foi refeita. É esse o ponto exato de retomada.
+
+**[ADIADA 2026-08-09]:** decisão explícita do usuário — a prioridade muda para o painel administrativo (Recom + Talgui App Center, já concluído em produção, fora deste roadmap) e para o desenvolvimento de outros aplicativos do ecossistema Talgui. Racional: o tempo de atividade do bloco Recomendados ainda é curto demais para que dados de atribuição GA4 sejam válidos/consideráveis — mais gasto de energia agora não compensaria. Fase permanece TBD/não planejada; retomar num milestone futuro, quando os outros aplicativos estiverem funcionais em produção.
+
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 9 to break down)
+- [ ] TBD — ADIADA, não planejar ainda (ver nota 2026-08-09)
 
 ### Phase 10: Migração para NubeSDK (prazo regulatório: bloqueio de novas instalações do Script legado em 30/08/2026, remoção progressiva a partir de 30/10/2026)
 
