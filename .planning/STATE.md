@@ -141,9 +141,24 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 
 ## Session
 
-**Last session:** 2026-08-09 (retomada pos-migracao de conta)
-**Stopped at:** Fase 9 (Dashboard GA4) formalmente ADIADA para milestone futuro (decisao do usuario) — deploy do Talgui App Center resolvido e verificado em producao (D-74), `.planning/` versionado no git apos redacao de credenciais. Nenhum trabalho GSD ativo em andamento no momento.
-**Resume file:** .planning/ROADMAP.md (nota na Fase 9) e .planning/PROJECT.md (Key Decisions)
+**Last session:** 2026-08-10 (pausada para migracao de conta)
+**Stopped at:** Refinamento do Painel Administrativo do Recom (4 cards), fora do roadmap GSD — bug do link do App Center corrigido e verificado; persistencia do Card 4 (daily_recompute_log) implementada e no ar; specs dos Cards 2/3/4 fechadas mas SEM implementacao de front-end/export ainda. Handoff completo em `.planning/.continue-here.md`.
+**Resume file:** .planning/.continue-here.md
+
+Sessao 2026-08-10 (fora dos planos GSD, retomada e refinamento do painel administrativo do
+Recom apos o usuario usa-lo de verdade em producao pela primeira vez): corrigido bug real no
+Talgui App Center (card do Recom linkava para localhost:5174 em vez da URL de producao —
+env var VITE_RECOM_ADMIN_URL nunca foi criada na Vercel; fallback trocado direto no codigo,
+commit ad856ee no repo separado, deploy verificado). Investigadas e respondidas 3 perguntas
+tecnicas do usuario sobre os dados do painel: MIN_SIZES_IN_STOCK confirmado em 1 (afrouxado,
+nao revertido); confirmado no codigo que produtos sem estoque aparecem no carrossel real (sem
+filtro de estoque em recommendations.js/main.js); achado que storefront-script/main-partners.js
+nao existe mais (consolidado em main.js em outra sessao, 06-07/08). Especificados com o
+usuario os 4 cards do painel (contagens exatas, formato de export Excel, 2 arquivos de
+exemplo fornecidos) e implementada a persistencia que faltava para o Card "Cron Diario"
+(tabela nova daily_recompute_log + wiring em run-daily-job.js + fix no workflow YAML para
+if:always(), commit 74d22cd, 275/275 testes). Front-end/export dos Cards 2/3/4 ainda NAO
+implementados — handoff completo com spec fechada em `.planning/.continue-here.md`.
 
 Sessao 2026-08-09 (fora dos planos GSD, nao bloqueia Fase 9 — trabalho paralelo pedido
 diretamente pelo usuario): construido painel administrativo web do Recom (contagem de
