@@ -139,7 +139,7 @@ const selectSnapshotsForRun = db.prepare(
 );
 
 const selectVariantsForRun = db.prepare(
-  `SELECT id, product_id, color_value, size_value, stock_total
+  `SELECT id, product_id, sku, color_value, size_value, stock_total
    FROM variants
    WHERE last_seen_run_id = @runId
    ORDER BY product_id, id`
@@ -255,6 +255,15 @@ const selectLatestSuccessfulRunSummaryStmt = db.prepare(
    FROM ingestion_runs WHERE status = 'success' ORDER BY id DESC LIMIT 1`
 );
 
+// Painel administrativo (Card "Cron Diário", achado 2026-08-10): lista TODAS as
+// execuções de ingestão, sem filtro de status — base do relatório histórico
+// dia-a-dia (buildCronLog em admin-dashboard.js precisa ver também eventuais
+// linhas 'failed' que cheguem a existir, não só 'success').
+const selectAllIngestionRunsStmt = db.prepare(
+  `SELECT id, started_at, finished_at, status, products_read
+   FROM ingestion_runs ORDER BY started_at ASC`
+);
+
 /**
  * Lê o snapshot completo do último run de ingestão com status 'success' e o
  * materializa no shape `CatalogProductEntry` consumido produto a produto por
@@ -306,7 +315,7 @@ const selectLatestSuccessfulRunSummaryStmt = db.prepare(
  *   productGroupCanonical: string|null,
  *   hasAvailableGrade: boolean,
  *   published: boolean|null,
- *   variants: Array<{ variantId: string, sizeValue: string|null, stockTotal: number }>
+ *   variants: Array<{ variantId: string, sku: string|null, sizeValue: string|null, stockTotal: number }>
  * }>}
  */
 export function getLatestSnapshotProducts() {
@@ -330,6 +339,7 @@ export function getLatestSnapshotProducts() {
     }
     variantsByProduct.get(productId).push({
       variantId: String(row.id),
+      sku: row.sku,
       sizeValue: row.size_value,
       stockTotal: row.stock_total,
     });
@@ -665,6 +675,23 @@ export function getLastWrittenValuesForAllProducts() {
     map.set(String(row.product_id), values);
   }
   return map;
+}
+
+/**
+ * Lista TODAS as execuções de ingestão, sem filtro de status, ordenadas
+ * cronologicamente — base do relatório histórico dia-a-dia do Card "Cron Diário"
+ * (achado 2026-08-10, `buildCronLog` em `admin-dashboard.js`).
+ * @returns {Array<{ runId: number, startedAt: string, finishedAt: string|null,
+ *   status: string, productsRead: number|null }>}
+ */
+export function listIngestionRuns() {
+  return selectAllIngestionRunsStmt.all().map((row) => ({
+    runId: row.id,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status,
+    productsRead: row.products_read,
+  }));
 }
 
 /**

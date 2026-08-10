@@ -11,13 +11,19 @@ import {
   getLatestSnapshotProducts,
   getLastWrittenValuesForAllProducts,
   getLastSuccessfulIngestionRunSummary,
+  listIngestionRuns,
+  listWriteLog,
+  listDailyRecomputeLog,
 } from './db/catalog-store.js';
-import { buildAdminDashboard } from './api/admin-dashboard.js';
+import { buildAdminDashboard, buildFabricTagDetail, buildCronLog } from './api/admin-dashboard.js';
+import { buildFabricTagWorkbook, buildCronLogWorkbook } from './api/admin-export.js';
 
 const PORT = process.env.ADMIN_PORT || 3200;
 const ADMIN_PANEL_ORIGIN = process.env.ADMIN_PANEL_ORIGIN || 'http://localhost:5174';
 
 const DASHBOARD_PATH = /^\/api\/dashboard\/?$/;
+const FABRIC_TAGS_PATH = /^\/api\/fabric-tags\/?$/;
+const CRON_LOG_PATH = /^\/api\/cron-log\/?$/;
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -29,6 +35,16 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function sendXlsx(res, buffer, filename) {
+  res.writeHead(200, {
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Length': buffer.length,
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Access-Control-Allow-Origin': ADMIN_PANEL_ORIGIN,
+  });
+  res.end(buffer);
+}
+
 /**
  * Factory pura (nunca inicia servidor por efeito colateral de import, mesmo
  * padrão de review-server.js) — retorna uma instância `http.Server` SEM
@@ -36,7 +52,7 @@ function sendJson(res, statusCode, payload) {
  * @returns {import('node:http').Server}
  */
 export function createServer() {
-  return createHttpServer((req, res) => {
+  return createHttpServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': ADMIN_PANEL_ORIGIN,
@@ -48,26 +64,60 @@ export function createServer() {
 
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-    if (!DASHBOARD_PATH.test(url.pathname)) {
-      sendJson(res, 404, { error: 'Not found' });
-      return;
-    }
-
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: 'Method Not Allowed' });
       return;
     }
 
-    try {
-      const dashboard = buildAdminDashboard({
-        snapshotProducts: getLatestSnapshotProducts(),
-        lastWrittenByProduct: getLastWrittenValuesForAllProducts(),
-        lastRunSummary: getLastSuccessfulIngestionRunSummary(),
-      });
-      sendJson(res, 200, dashboard);
-    } catch (err) {
-      sendJson(res, 500, { error: 'Internal error building dashboard' });
+    if (DASHBOARD_PATH.test(url.pathname)) {
+      try {
+        const dashboard = buildAdminDashboard({
+          snapshotProducts: getLatestSnapshotProducts(),
+          lastWrittenByProduct: getLastWrittenValuesForAllProducts(),
+          lastRunSummary: getLastSuccessfulIngestionRunSummary(),
+        });
+        sendJson(res, 200, dashboard);
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error building dashboard' });
+      }
+      return;
     }
+
+    if (FABRIC_TAGS_PATH.test(url.pathname)) {
+      try {
+        const detail = buildFabricTagDetail({ snapshotProducts: getLatestSnapshotProducts() });
+        if (url.searchParams.get('format') === 'xlsx') {
+          const buffer = await buildFabricTagWorkbook({ rows: detail.rows });
+          sendXlsx(res, buffer, 'catalogo_tags_tecidos.xlsx');
+        } else {
+          sendJson(res, 200, detail);
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error building fabric tag detail' });
+      }
+      return;
+    }
+
+    if (CRON_LOG_PATH.test(url.pathname)) {
+      try {
+        const log = buildCronLog({
+          ingestionRuns: listIngestionRuns(),
+          writeLogRows: listWriteLog(),
+          dailyRecomputeLogRows: listDailyRecomputeLog(),
+        });
+        if (url.searchParams.get('format') === 'xlsx') {
+          const buffer = await buildCronLogWorkbook({ rows: log });
+          sendXlsx(res, buffer, 'log_cron.xlsx');
+        } else {
+          sendJson(res, 200, { rows: log });
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error building cron log' });
+      }
+      return;
+    }
+
+    sendJson(res, 404, { error: 'Not found' });
   });
 }
 

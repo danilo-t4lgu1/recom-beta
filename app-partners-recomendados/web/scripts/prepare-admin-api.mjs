@@ -11,7 +11,7 @@
 // Rodar de novo (e commitar o resultado) sempre que: (a) data/catalog.db for
 // atualizado pelo job diário — ver .github/workflows/daily-recompute.yml, que
 // roda isso automaticamente no mesmo commit-back; ou (b) catalog-store.js/
-// schema.sql/admin-dashboard.js mudarem de conteúdo.
+// schema.sql/admin-dashboard.js/admin-export.js mudarem de conteúdo.
 
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -31,6 +31,7 @@ const files = [
   [join(PROJECT_ROOT, 'src', 'db', 'catalog-store.js'), join(LIB_DIR, 'catalog-store.js')],
   [join(PROJECT_ROOT, 'src', 'db', 'schema.sql'), join(LIB_DIR, 'schema.sql')],
   [join(PROJECT_ROOT, 'src', 'api', 'admin-dashboard.js'), join(LIB_DIR, 'admin-dashboard.js')],
+  [join(PROJECT_ROOT, 'src', 'api', 'admin-export.js'), join(LIB_DIR, 'admin-export.js')],
   [join(PROJECT_ROOT, 'data', 'catalog.db'), join(DATA_DIR, 'catalog.db')],
 ];
 

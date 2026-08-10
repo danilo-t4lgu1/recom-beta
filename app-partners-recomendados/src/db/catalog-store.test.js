@@ -182,6 +182,9 @@ describe('catalog-store.js', () => {
     const found = rows.find((row) => row.productId === 'prod-novo');
     expect(found).toBeDefined();
     expect(found.productGroupCanonical).toBe('Partes de Cima');
+    expect(found.variants).toEqual([
+      { variantId: 'var-novo', sku: 'SKU2', sizeValue: 'P', stockTotal: 10 },
+    ]);
   });
 
   it('linhas gravadas ANTES da migração continuam legíveis, com product_group_canonical null (Test 4)', async () => {

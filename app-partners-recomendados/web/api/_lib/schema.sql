@@ -116,3 +116,25 @@ CREATE TABLE IF NOT EXISTS write_log (
   written_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_write_log_product ON write_log(product_id, written_at);
+
+-- daily_recompute_log: 1 linha por execução do job diário (run-daily-job.js),
+-- registrando o resultado da etapa de RECOMPUTE/ESCRITA (distinta do resultado da
+-- INGESTÃO, já coberto por ingestion_runs.status) -- painel administrativo, achado
+-- 2026-08-10. `run_id` é NULLABLE porque a etapa de ingestão pode falhar ANTES de
+-- criar uma linha em ingestion_runs (ex: erro de rede durante a leitura, como o
+-- incidente de 2026-07-23) -- este log precisa registrar o dia mesmo nesse caso,
+-- por isso NUNCA é chaveado só por run_id. Append-only, mesma disciplina de
+-- write_log/catalog_snapshots -- nunca update/upsert.
+CREATE TABLE IF NOT EXISTS daily_recompute_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER REFERENCES ingestion_runs(id),
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  status TEXT NOT NULL,         -- 'ok' | 'error'
+  reason TEXT,                  -- NULL quando status='ok'; motivo/mensagem quando 'error'
+  alterados INTEGER,
+  zerados INTEGER,
+  novos INTEGER,
+  dry_run INTEGER               -- 0/1/NULL (NULL quando nem chegou a essa decisão)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_recompute_log_started_at ON daily_recompute_log(started_at);
