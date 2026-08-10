@@ -1,34 +1,36 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-10T15:00:00Z",
+  "timestamp": "2026-08-10T16:45:00Z",
   "phase": "none",
   "phase_name": "refinamento-painel-administrativo-recom-4-cards (fora do roadmap GSD)",
   "phase_dir": null,
   "plan": null,
   "task": null,
   "total_tasks": null,
-  "status": "paused",
+  "status": "done",
   "completed_tasks": [
     { "id": 1, "name": "Fix: card Recom no Talgui App Center linkava para localhost:5174", "status": "done", "progress": "src/data/apps.js fallback trocado para https://recom-admin-talgui.vercel.app, commit ad856ee, deploy Ready verificado via curl no bundle publicado" },
     { "id": 2, "name": "Investigar MIN_SIZES_IN_STOCK atual sem acesso ao GitHub", "status": "done", "progress": "confirmado como 1 (nao revertido para default 3) via query em catalog_snapshots (sizes_in_stock_count=1 com has_available_grade=1)" },
     { "id": 3, "name": "Confirmar se produtos sem estoque aparecem no carrossel real", "status": "done", "progress": "confirmado no codigo (recommendations.js + main.js): nenhum filtro de estoque existe, produto aparece com chips de tamanho 'off'" },
-    { "id": 4, "name": "Persistir resultado da etapa de recompute/escrita (Card 4 - Cron Diario)", "status": "done", "progress": "tabela daily_recompute_log + insertDailyRecomputeLog/listDailyRecomputeLog/getDailyRecomputeLogSince + wiring em run-daily-job.js (todos os pontos de saida) + if:always() no workflow YAML. Commit 74d22cd, 275/275 testes passando. Dado real so a partir do cron de 2026-08-11 (persistencia ligada depois do cron de hoje)." }
+    { "id": 4, "name": "Persistir resultado da etapa de recompute/escrita (Card 4 - Cron Diario)", "status": "done", "progress": "tabela daily_recompute_log + insertDailyRecomputeLog/listDailyRecomputeLog/getDailyRecomputeLogSince + wiring em run-daily-job.js (todos os pontos de saida) + if:always() no workflow YAML. Commit 74d22cd, 275/275 testes passando." },
+    { "id": 5, "name": "Card 2 (Estoque dos Relacionados): trocar unidades totais por 'Recomendados sem estoque: N de X'", "status": "done", "progress": "usuario confirmou explicitamente; web/src/App.jsx atualizado" },
+    { "id": 6, "name": "Card 3 (Tecido Preenchido em Tags): extensao de sku, agregacao por Grupo_De_Tecidos, card invertido + Ver Detalhes + export XLSX", "status": "done", "progress": "getLatestSnapshotProducts estendida com sku; buildFabricTagDetail em admin-dashboard.js; buildFabricTagWorkbook em admin-export.js (exceljs); endpoint GET /api/fabric-tags (+?format=xlsx); UI com expansao por grupo" },
+    { "id": 7, "name": "Card 4 (Cron Diario): join ingestion_runs+daily_recompute_log, card com check + data/hora, expansao 7 dias, export XLSX historico completo", "status": "done", "progress": "buildCronLog em admin-dashboard.js (sweep cronologico de write_log para Relacionados historico); buildCronLogWorkbook em admin-export.js; endpoint GET /api/cron-log (+?format=xlsx); UI com tabela dos ultimos 7 dias" },
+    { "id": 8, "name": "Testes + verificacao end-to-end em producao", "status": "done", "progress": "18 testes novos, 293/293 passando; verificado localmente (vite dev + admin-server) e em producao via curl (JSON + xlsx dos 2 endpoints novos + campo novo do dashboard)" }
   ],
-  "remaining_tasks": [
-    { "id": 5, "name": "Card 2 (Estoque dos Relacionados): confirmar com usuario e implementar troca de unidades totais por 'Recomendados sem estoque: N de X'", "status": "not_started", "blocking_decision": "usuario ainda nao confirmou explicitamente que pode implementar essa troca" },
-    { "id": 6, "name": "Card 3 (Tecido Preenchido em Tags): extensao de sku em getLatestSnapshotProducts + agregacao por Grupo_De_Tecidos + card com framing invertido (SKUs SEM tag) + botao Ver Detalhes + export XLSX", "status": "not_started", "spec_file": "C:\\Users\\danil\\Desktop\\catalogo_tags_tecidos_10_08.xlsx" },
-    { "id": 7, "name": "Card 4 (Cron Diario): join ingestion_runs + daily_recompute_log por dia + card com icone de check + data/hora + expansao de log dos ultimos 7 dias + export XLSX com historico completo desde 2026-07-17", "status": "not_started", "spec_file": "C:\\Users\\danil\\Desktop\\log_cron.xlsx" }
-  ],
+  "remaining_tasks": [],
   "blockers": [],
   "async_jobs": [],
   "human_actions_pending": [],
   "decisions": [
-    { "decision": "Card 2: recomendacao dada (trocar unidades totais por contagem de sem-estoque), mas requer confirmacao explicita do usuario antes de implementar", "rationale": "unidades somadas (18.070un) nao tem valor analitico isolado; zeroStockCount ja e calculado no backend e reflete um risco operacional real (produto sem estoque visivel no carrossel)", "phase": "none" },
+    { "decision": "Card 2: usuario confirmou explicitamente antes da implementacao", "rationale": "unidades somadas (18.070un) nao tinha valor analitico isolado; zeroStockCount ja era calculado no backend e reflete um risco operacional real (produto sem estoque visivel no carrossel, confirmado no codigo)", "phase": "none" },
     { "decision": "Nomes de coluna dos exports (Card 3/4) seguem os arquivos .xlsx de exemplo do usuario literalmente, nao o resumo em texto da conversa", "rationale": "os nomes reais na planilha diferem do resumo em texto (ex: 'Grupo_De_Tecidos' em vez de 'TECIDOS')", "phase": "none" },
     { "decision": "daily_recompute_log.run_id e NULLABLE por design", "rationale": "a ingestao pode falhar (excecao de rede) ANTES de criar uma linha em ingestion_runs (caso real: incidente 2026-07-23) -- sem essa nulidade, esse cenario ficaria sem nenhum registro no log de cron", "phase": "none" },
-    { "decision": "if: always() adicionado aos passos de sincronizar catalogo vendorizado e commit-back no workflow YAML", "rationale": "sem isso, o GitHub Actions pula esses passos quando o passo de ingestao falha (exit 1), entao um registro de erro no daily_recompute_log nunca chegaria ao git -- so ficaria preso no runner efemero", "phase": "none" }
+    { "decision": "if: always() adicionado aos passos de sincronizar catalogo vendorizado e commit-back no workflow YAML", "rationale": "sem isso, o GitHub Actions pula esses passos quando o passo de ingestao falha (exit 1), entao um registro de erro no daily_recompute_log nunca chegaria ao git -- so ficaria preso no runner efemero", "phase": "none" },
+    { "decision": "Export gerado com exceljs, nao xlsx/SheetJS", "rationale": "auditoria de pacote (npm audit) encontrou 2 vulnerabilidades HIGH sem correcao disponivel em xlsx (prototype pollution + ReDoS no parsing); exceljs so tem 2 MODERATE transitivas via uuid, nao exploraveis pelo uso que fazemos (so geramos arquivos, nunca parseamos .xlsx de terceiros)", "phase": "none" },
+    { "decision": "Geracao do Excel 100% server-side (Vercel function), nao client-side", "rationale": "evita bundlar uma biblioteca de excel pesada no cliente (bundle nao cresceu); reaproveita o mesmo padrao de vendoring ja usado por catalog-store.js/admin-dashboard.js", "phase": "none" }
   ],
   "uncommitted_files": [],
-  "next_action": "Perguntar ao usuario se pode seguir com a troca do Card 2. Implementar Card 3 (extensao de sku, agregacao por grupo de tecido, export XLSX) e Card 4 (join ingestion_runs+daily_recompute_log, UI de expansao 7 dias, export XLSX com historico completo desde 2026-07-17). Reler os dois arquivos de exemplo do usuario (C:\\Users\\danil\\Desktop\\catalogo_tags_tecidos_10_08.xlsx e log_cron.xlsx) antes de implementar -- sao a fonte de verdade do formato exato de colunas, nao o resumo em texto.",
-  "context_notes": "Sessao de refinamento pratico apos o usuario usar o painel administrativo real em producao pela primeira vez (construido em sessao anterior, D-71 a D-74). Achado tecnico relevante fora do escopo direto: storefront-script/main-partners.js (citado em sessoes anteriores) nao existe mais na pasta -- parece ter sido consolidado dentro de main.js em outra sessao entre 2026-08-06 e 2026-08-07 (mesmo tamanho de arquivo). O script publicado/ativo hoje e main.js. Nao bloqueia nada, so vale confirmar com o usuario quando puder. Fase 9 (Dashboard GA4) continua formalmente adiada (ver ROADMAP.md) -- este handoff nao tem nenhuma relacao com ela."
+  "next_action": "Nenhuma acao pendente deste trabalho -- concluido e verificado em producao (commit 6b383ff). Unico item de acompanhamento futuro (nao bloqueante): confirmar que o Card 4 (Daily_Recompute) populou 'OK'/'ERROR' a partir do cron de 2026-08-11 em diante -- hoje (10/08) ainda mostra '-' pois a persistencia so comecou a valer depois do cron de hoje ter rodado.",
+  "context_notes": "Sessao de refinamento pratico apos o usuario usar o painel administrativo real em producao pela primeira vez (construido em sessao anterior, D-71 a D-74). Retomada e concluida na MESMA sessao (usuario decidiu nao migrar de conta e continuar direto). Achado tecnico relevante fora do escopo direto: storefront-script/main-partners.js (citado em sessoes anteriores) nao existe mais na pasta -- parece ter sido consolidado dentro de main.js em outra sessao entre 2026-08-06 e 2026-08-07 (mesmo tamanho de arquivo). O script publicado/ativo hoje e main.js. Nao bloqueia nada, so vale confirmar com o usuario quando puder. Fase 9 (Dashboard GA4) continua formalmente adiada (ver ROADMAP.md) -- este handoff nao tem nenhuma relacao com ela."
 }

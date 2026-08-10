@@ -141,8 +141,8 @@ See: .planning/PROJECT.md (updated 2026-07-17)
 
 ## Session
 
-**Last session:** 2026-08-10 (pausada para migracao de conta)
-**Stopped at:** Refinamento do Painel Administrativo do Recom (4 cards), fora do roadmap GSD — bug do link do App Center corrigido e verificado; persistencia do Card 4 (daily_recompute_log) implementada e no ar; specs dos Cards 2/3/4 fechadas mas SEM implementacao de front-end/export ainda. Handoff completo em `.planning/.continue-here.md`.
+**Last session:** 2026-08-10 (retomada e concluida na mesma sessao, sem migracao de conta ter ocorrido)
+**Stopped at:** Refinamento do Painel Administrativo do Recom (4 cards), fora do roadmap GSD — CONCLUIDO. Bug do link do App Center corrigido; os 4 cards redesenhados (Card 2 mostra sem-estoque, Card 3/4 ganharam expansao + export Excel); tudo verificado em producao (commit `6b383ff`). Unico item de acompanhamento futuro: confirmar que Daily_Recompute (Card 4) populou a partir do cron de 11/08.
 **Resume file:** .planning/.continue-here.md
 
 Sessao 2026-08-10 (fora dos planos GSD, retomada e refinamento do painel administrativo do
@@ -157,8 +157,16 @@ nao existe mais (consolidado em main.js em outra sessao, 06-07/08). Especificado
 usuario os 4 cards do painel (contagens exatas, formato de export Excel, 2 arquivos de
 exemplo fornecidos) e implementada a persistencia que faltava para o Card "Cron Diario"
 (tabela nova daily_recompute_log + wiring em run-daily-job.js + fix no workflow YAML para
-if:always(), commit 74d22cd, 275/275 testes). Front-end/export dos Cards 2/3/4 ainda NAO
-implementados — handoff completo com spec fechada em `.planning/.continue-here.md`.
+if:always(), commit 74d22cd, 275/275 testes). Sessao retomada e concluida no mesmo bloco de trabalho (usuario decidiu
+continuar em vez de migrar de conta): Card 2 confirmado e trocado para "sem estoque: N de X";
+Card 3 ganhou extensao de sku em getLatestSnapshotProducts, agregacao por Grupo_De_Tecidos,
+expansao no card e export Excel (colunas ID_Nuvem/Nome/SKU/Estoque/Tag/Grupo_De_Tecidos);
+Card 4 ganhou funcao buildCronLog (join ingestion_runs + sweep cronologico de write_log +
+daily_recompute_log), expansao com ultimos 7 dias e export Excel com historico completo desde
+2026-07-17. Export via exceljs (nao xlsx/SheetJS, que tem 2 vulnerabilidades HIGH sem
+correcao). 18 testes novos, 293/293 passando, tudo verificado em producao via curl (JSON +
+xlsx) e visualmente via vite dev local. Commit `6b383ff`, pushado. Handoff atualizado para
+status concluido em `.planning/.continue-here.md`.
 
 Sessao 2026-08-09 (fora dos planos GSD, nao bloqueia Fase 9 — trabalho paralelo pedido
 diretamente pelo usuario): construido painel administrativo web do Recom (contagem de
