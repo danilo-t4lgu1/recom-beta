@@ -32,6 +32,7 @@ import {
   getLatestSuccessfulRunId,
   getBaselineForRun,
   getLastSuccessfulIngestionRunSummary,
+  insertDailyRecomputeLog,
   getLastWrittenValuesForAllProducts,
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
@@ -157,6 +158,10 @@ export function evaluateSnapshotIntegrity({
 }
 
 export async function runDailyJob({ categoryNames, fullCatalog = false, allowSameDayRerun = false } = {}) {
+  // Painel administrativo (achado 2026-08-10): marca o início desta chamada para o
+  // registro em daily_recompute_log em cada ponto de saída abaixo — resultado da
+  // etapa de RECOMPUTE/ESCRITA, distinto de ingestion_runs.status (etapa de INGESTÃO).
+  const jobStartedAt = new Date().toISOString();
   const existingRunId = getSuccessfulRunForToday();
 
   if (existingRunId != null && !allowSameDayRerun) {
@@ -197,6 +202,13 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
       productId: 'daily-job',
       error: new Error(integrity.reason),
       triggeredBy: 'scheduled',
+    });
+    insertDailyRecomputeLog({
+      runId,
+      startedAt: jobStartedAt,
+      finishedAt: new Date().toISOString(),
+      status: 'error',
+      reason: integrity.reason,
     });
     return { skipped: false, runId, queueLength: 0, ingestionResult, aborted: 'integrity' };
   }
@@ -250,6 +262,17 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
     await notifyDailySummary({
       summary: { alterados: 0, zerados: 0, novos: 0, aborted: 'circuit-breaker', reason: breaker.reason },
     });
+    insertDailyRecomputeLog({
+      runId,
+      startedAt: jobStartedAt,
+      finishedAt: new Date().toISOString(),
+      status: 'error',
+      reason: breaker.reason,
+      alterados: 0,
+      zerados: 0,
+      novos: 0,
+      dryRun,
+    });
     return { skipped: false, runId, queueLength: queueEntries.length, ingestionResult, aborted: 'circuit-breaker' };
   }
 
@@ -279,6 +302,17 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
   const summary = { alterados, zerados, novos, dryRun };
   await notifyDailySummary({ summary });
 
+  insertDailyRecomputeLog({
+    runId,
+    startedAt: jobStartedAt,
+    finishedAt: new Date().toISOString(),
+    status: 'ok',
+    alterados,
+    zerados,
+    novos,
+    dryRun,
+  });
+
   return { skipped: false, runId, queueLength: queueEntries.length, ingestionResult, summary };
 }
 
@@ -300,6 +334,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // GitHub Actions define esta env var; o cron agendado NUNCA a define (ver YAML).
   const allowSameDayRerun = process.env.ALLOW_SAME_DAY_RERUN === 'true';
 
+  // Painel administrativo (achado 2026-08-10): marcado ANTES de chamar runDailyJob
+  // para cobrir o caso mais grave — uma exceção não tratada dentro da própria
+  // ingestão (ex: erro de rede antes de qualquer linha em ingestion_runs existir,
+  // como o incidente de 2026-07-23) nunca passa pelos pontos de saída internos de
+  // runDailyJob, então precisa de um registro próprio aqui no catch, com
+  // runId:null (não é seguro assumir que um run_id existente no banco pertence a
+  // hoje quando a exceção interrompe o fluxo antes de sabermos).
+  const cliStartedAt = new Date().toISOString();
+
   runDailyJob({ categoryNames, fullCatalog, allowSameDayRerun })
     .then((result) => {
       console.log('\n=== Resumo da execução do job diário ===');
@@ -314,6 +357,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     .catch(async (err) => {
       console.error('\nERRO durante o job diário:', err.message);
       await notifyWriteFailure({ productId: 'daily-job', error: err, triggeredBy: 'scheduled' });
+      insertDailyRecomputeLog({
+        runId: null,
+        startedAt: cliStartedAt,
+        finishedAt: new Date().toISOString(),
+        status: 'error',
+        reason: err.message,
+      });
+      checkpointAndCloseDb();
       process.exit(1);
     });
 }

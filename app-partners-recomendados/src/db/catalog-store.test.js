@@ -492,6 +492,94 @@ describe('write_log (Fase 5, D-41/D-42)', () => {
   });
 });
 
+describe('daily_recompute_log (Painel Administrativo — Card Cron Diário, achado 2026-08-10)', () => {
+  it('insertDailyRecomputeLog seguido de listDailyRecomputeLog() retorna a linha com todos os campos traduzidos, status ok', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = store.startIngestionRun({ categoryId: '1', categoryName: 'Vestidos' });
+    store.finishIngestionRun({ runId, status: 'success', productsRead: 10 });
+
+    store.insertDailyRecomputeLog({
+      runId,
+      startedAt: '2026-08-10T06:41:00.000Z',
+      finishedAt: '2026-08-10T06:41:47.000Z',
+      status: 'ok',
+      alterados: 5,
+      zerados: 1,
+      novos: 2,
+      dryRun: false,
+    });
+
+    const rows = store.listDailyRecomputeLog();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      runId,
+      startedAt: '2026-08-10T06:41:00.000Z',
+      finishedAt: '2026-08-10T06:41:47.000Z',
+      status: 'ok',
+      reason: null,
+      alterados: 5,
+      zerados: 1,
+      novos: 2,
+      dryRun: false,
+    });
+  });
+
+  it('aceita runId:null (ingestão falhou antes de criar uma linha em ingestion_runs) e grava status error com reason', async () => {
+    const store = await import('./catalog-store.js');
+
+    store.insertDailyRecomputeLog({
+      runId: null,
+      startedAt: '2026-07-23T12:11:00.000Z',
+      finishedAt: '2026-07-23T12:11:05.000Z',
+      status: 'error',
+      reason: 'fetch failed: 502 Bad Gateway',
+    });
+
+    const rows = store.listDailyRecomputeLog();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].runId).toBeNull();
+    expect(rows[0].status).toBe('error');
+    expect(rows[0].reason).toBe('fetch failed: 502 Bad Gateway');
+    expect(rows[0].alterados).toBeNull();
+    expect(rows[0].dryRun).toBeNull();
+  });
+
+  it('getDailyRecomputeLogSince filtra por data (inclusive) e ordena cronologicamente', async () => {
+    const store = await import('./catalog-store.js');
+
+    store.insertDailyRecomputeLog({
+      runId: null,
+      startedAt: '2026-08-09T06:00:00.000Z',
+      finishedAt: '2026-08-09T06:01:00.000Z',
+      status: 'ok',
+    });
+    store.insertDailyRecomputeLog({
+      runId: null,
+      startedAt: '2026-08-11T06:00:00.000Z',
+      finishedAt: '2026-08-11T06:01:00.000Z',
+      status: 'ok',
+    });
+    store.insertDailyRecomputeLog({
+      runId: null,
+      startedAt: '2026-08-10T06:00:00.000Z',
+      finishedAt: '2026-08-10T06:01:00.000Z',
+      status: 'error',
+      reason: 'timeout',
+    });
+
+    const rows = store.getDailyRecomputeLogSince({ since: '2026-08-10T00:00:00.000Z' });
+    expect(rows).toHaveLength(2);
+    expect(rows[0].startedAt).toBe('2026-08-10T06:00:00.000Z');
+    expect(rows[1].startedAt).toBe('2026-08-11T06:00:00.000Z');
+  });
+
+  it('nenhuma linha inserida => listDailyRecomputeLog/getDailyRecomputeLogSince retornam array vazio, nunca lançam', async () => {
+    const store = await import('./catalog-store.js');
+    expect(store.listDailyRecomputeLog()).toEqual([]);
+    expect(store.getDailyRecomputeLogSince({ since: '2026-01-01T00:00:00.000Z' })).toEqual([]);
+  });
+});
+
 describe('getSuccessfulRunForToday / seedPendingApprovalQueue / checkpointAndCloseDb (Fase 6, D-45/D-46/D-47/D-48)', () => {
   /**
    * Grava um produto real na tabela `products` — mesmo motivo já documentado no

@@ -214,6 +214,23 @@ const selectAllWriteLogStmt = db.prepare(
   `SELECT * FROM write_log ORDER BY written_at DESC`
 );
 
+// Painel administrativo (achado 2026-08-10): registra o resultado da etapa de
+// RECOMPUTE/ESCRITA do job diário, distinto de ingestion_runs.status (etapa de
+// INGESTÃO). Append-only, mesma disciplina de write_log — nunca update/upsert.
+const insertDailyRecomputeLogStmt = db.prepare(
+  `INSERT INTO daily_recompute_log
+     (run_id, started_at, finished_at, status, reason, alterados, zerados, novos, dry_run)
+   VALUES (@runId, @startedAt, @finishedAt, @status, @reason, @alterados, @zerados, @novos, @dryRun)`
+);
+
+const selectDailyRecomputeLogSinceStmt = db.prepare(
+  `SELECT * FROM daily_recompute_log WHERE started_at >= @since ORDER BY started_at ASC`
+);
+
+const selectAllDailyRecomputeLogStmt = db.prepare(
+  `SELECT * FROM daily_recompute_log ORDER BY started_at ASC`
+);
+
 // Fase 07 (D-63): baseline de CONJUNTO por produto para o disjuntor — a linha
 // `status = 'success'` mais recente (maior `written_at`) de cada `product_id`. O
 // filtro de status vive DENTRO da subquery de agregação, então uma linha `failed`
@@ -540,6 +557,86 @@ export function getLastSuccessfulWriteLog({ productId }) {
  */
 export function listWriteLog() {
   return selectAllWriteLogStmt.all().map(mapWriteLogRow);
+}
+
+/**
+ * Traduz uma linha crua (snake_case) de `daily_recompute_log` para o shape
+ * camelCase consumido por `listDailyRecomputeLog`/`getDailyRecomputeLogSince` —
+ * mesmo padrão de `mapWriteLogRow`.
+ * @param {object} row linha crua retornada por `db.prepare(...).get()/.all()`
+ * @returns {{ id: number, runId: number|null, startedAt: string, finishedAt: string,
+ *   status: 'ok'|'error', reason: string|null, alterados: number|null,
+ *   zerados: number|null, novos: number|null, dryRun: boolean|null }}
+ */
+function mapDailyRecomputeLogRow(row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status,
+    reason: row.reason,
+    alterados: row.alterados,
+    zerados: row.zerados,
+    novos: row.novos,
+    dryRun: row.dry_run == null ? null : row.dry_run === 1,
+  };
+}
+
+/**
+ * Insere exatamente 1 linha nova em `daily_recompute_log` a cada chamada — nunca
+ * upsert/update (append-only, mesma disciplina de `insertWriteLog`). Registra o
+ * resultado da etapa de RECOMPUTE/ESCRITA do job diário (Card "Cron Diário" do
+ * painel administrativo, achado 2026-08-10) — sempre grava uma linha, mesmo quando
+ * a ingestão falhou ANTES de criar uma linha em `ingestion_runs` (`runId: null`
+ * nesse caso), para que o dia nunca fique com um buraco silencioso no relatório.
+ * @param {{ runId: number|null, startedAt: string, finishedAt: string,
+ *   status: 'ok'|'error', reason?: string|null, alterados?: number|null,
+ *   zerados?: number|null, novos?: number|null, dryRun?: boolean|null }} params
+ * @returns {void}
+ */
+export function insertDailyRecomputeLog({
+  runId,
+  startedAt,
+  finishedAt,
+  status,
+  reason,
+  alterados,
+  zerados,
+  novos,
+  dryRun,
+}) {
+  insertDailyRecomputeLogStmt.run({
+    runId: runId ?? null,
+    startedAt,
+    finishedAt,
+    status,
+    reason: reason ?? null,
+    alterados: alterados ?? null,
+    zerados: zerados ?? null,
+    novos: novos ?? null,
+    dryRun: dryRun == null ? null : dryRun ? 1 : 0,
+  });
+}
+
+/**
+ * Lista as linhas de `daily_recompute_log` a partir de uma data (inclusive),
+ * ordenadas cronologicamente — base do relatório exportável do Card "Cron Diário"
+ * do painel administrativo.
+ * @param {{ since: string }} params data ISO 8601 (comparação lexicográfica, mesmo padrão de `started_at`)
+ * @returns {Array<object>} linhas traduzidas (camelCase)
+ */
+export function getDailyRecomputeLogSince({ since }) {
+  return selectDailyRecomputeLogSinceStmt.all({ since }).map(mapDailyRecomputeLogRow);
+}
+
+/**
+ * Lista TODAS as linhas de `daily_recompute_log`, sem filtro — mesmo padrão de
+ * `listWriteLog`.
+ * @returns {Array<object>} linhas traduzidas (camelCase)
+ */
+export function listDailyRecomputeLog() {
+  return selectAllDailyRecomputeLogStmt.all().map(mapDailyRecomputeLogRow);
 }
 
 /**

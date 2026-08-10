@@ -153,6 +153,10 @@ describe('runDailyJob', () => {
     const changes = store.listApprovalQueueChanges({ runId: result.runId });
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ productId: 'produto-1', status: 'pending' });
+
+    const dailyLog = store.listDailyRecomputeLog();
+    expect(dailyLog).toHaveLength(1);
+    expect(dailyLog[0]).toMatchObject({ runId: result.runId, status: 'ok', reason: null });
   });
 
   it('runDailyJob({ fullCatalog: true }) pagina o catálogo inteiro via listAllProducts, NUNCA chama listCategories/listProducts (achado 2026-07-28)', async () => {
@@ -422,6 +426,12 @@ describe('runDailyJob — Defesa 1 integração (D-66)', () => {
       expect.objectContaining({ productId: 'daily-job', triggeredBy: 'scheduled' })
     );
     expect(executeScheduledWrite).not.toHaveBeenCalled();
+
+    const store = await import('../src/db/catalog-store.js');
+    const dailyLog = store.listDailyRecomputeLog();
+    expect(dailyLog).toHaveLength(1);
+    expect(dailyLog[0].status).toBe('error');
+    expect(dailyLog[0].reason).toMatch(/0 produto|truncad/i);
   });
 
   it('total abaixo da banda vs último run: aborta com aborted:integrity, notifica e NÃO grava', async () => {
@@ -447,6 +457,12 @@ describe('runDailyJob — Defesa 1 integração (D-66)', () => {
     expect(result.aborted).toBe('integrity');
     expect(notifyWriteFailure).toHaveBeenCalledTimes(1);
     expect(executeScheduledWrite).not.toHaveBeenCalled();
+
+    const store = await import('../src/db/catalog-store.js');
+    const dailyLog = store.listDailyRecomputeLog();
+    expect(dailyLog).toHaveLength(1);
+    expect(dailyLog[0].status).toBe('error');
+    expect(dailyLog[0].reason).toMatch(/total/i);
   });
 });
 
@@ -533,6 +549,14 @@ describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67
     expect(executeScheduledWrite.mock.calls[0][0].snapshotById).toBeInstanceOf(Map);
     expect(notifyDailySummary).toHaveBeenCalledTimes(1);
     expect(notifyWriteFailure).not.toHaveBeenCalled();
+
+    const store = await import('../src/db/catalog-store.js');
+    const dailyLog = store.listDailyRecomputeLog();
+    expect(dailyLog).toHaveLength(1);
+    expect(dailyLog[0].status).toBe('ok');
+    expect(dailyLog[0].reason).toBeNull();
+    expect(dailyLog[0].dryRun).toBe(true);
+    expect(dailyLog[0].novos + dailyLog[0].alterados + dailyLog[0].zerados).toBe(2);
   });
 
   it('kill switch on: executeScheduledWrite com dryRun:false só para elegíveis+diff; fonte oculta (sem baseline) não recebe escrita', async () => {
@@ -599,5 +623,12 @@ describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67
     expect(notifyWriteFailure).toHaveBeenCalledWith(
       expect.objectContaining({ productId: 'daily-job', triggeredBy: 'scheduled' })
     );
+
+    const store = await import('../src/db/catalog-store.js');
+    const dailyLog = store.listDailyRecomputeLog();
+    expect(dailyLog).toHaveLength(1);
+    expect(dailyLog[0].status).toBe('error');
+    expect(dailyLog[0].reason).toBeTruthy();
+    expect(dailyLog[0].alterados).toBe(0);
   });
 });

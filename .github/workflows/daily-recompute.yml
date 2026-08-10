@@ -83,9 +83,20 @@ jobs:
         # Rodar aqui garante que o mesmo push que atualiza data/catalog.db
         # também atualiza a cópia do painel, disparando o auto-deploy da Vercel
         # (projeto recom-admin) com dado fresco do dia, sem passo manual.
+        # `if: always()` (achado 2026-08-10): o passo anterior pode terminar com
+        # exit 1 numa exceção não tratada (ex: erro de rede na ingestão) e ainda
+        # assim ter gravado uma linha em daily_recompute_log (status='error') —
+        # sem always() aqui, o Card "Cron Diário" do painel nunca veria esse dia.
+        if: always()
         run: node web/scripts/prepare-admin-api.mjs
 
       - name: Commit-back do catálogo atualizado (D-45)
+        # `if: always()` pelo mesmo motivo do passo acima — sem isso, um job
+        # diário que falha com exceção nunca chega a este passo (comportamento
+        # padrão do GitHub Actions ao pular passos após uma falha), e o registro
+        # de erro em daily_recompute_log fica preso só no runner efêmero, nunca
+        # chegando ao git/painel administrativo.
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
