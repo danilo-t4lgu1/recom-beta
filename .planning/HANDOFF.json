@@ -1,36 +1,50 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-10T16:45:00Z",
+  "timestamp": "2026-08-12T13:15:00Z",
   "phase": "none",
-  "phase_name": "refinamento-painel-administrativo-recom-4-cards (fora do roadmap GSD)",
+  "phase_name": "estado-geral-do-projeto (fora do roadmap GSD + acompanhamento operacional)",
   "phase_dir": null,
   "plan": null,
   "task": null,
   "total_tasks": null,
-  "status": "done",
+  "status": "paused",
   "completed_tasks": [
-    { "id": 1, "name": "Fix: card Recom no Talgui App Center linkava para localhost:5174", "status": "done", "progress": "src/data/apps.js fallback trocado para https://recom-admin-talgui.vercel.app, commit ad856ee, deploy Ready verificado via curl no bundle publicado" },
-    { "id": 2, "name": "Investigar MIN_SIZES_IN_STOCK atual sem acesso ao GitHub", "status": "done", "progress": "confirmado como 1 (nao revertido para default 3) via query em catalog_snapshots (sizes_in_stock_count=1 com has_available_grade=1)" },
-    { "id": 3, "name": "Confirmar se produtos sem estoque aparecem no carrossel real", "status": "done", "progress": "confirmado no codigo (recommendations.js + main.js): nenhum filtro de estoque existe, produto aparece com chips de tamanho 'off'" },
-    { "id": 4, "name": "Persistir resultado da etapa de recompute/escrita (Card 4 - Cron Diario)", "status": "done", "progress": "tabela daily_recompute_log + insertDailyRecomputeLog/listDailyRecomputeLog/getDailyRecomputeLogSince + wiring em run-daily-job.js (todos os pontos de saida) + if:always() no workflow YAML. Commit 74d22cd, 275/275 testes passando." },
-    { "id": 5, "name": "Card 2 (Estoque dos Relacionados): trocar unidades totais por 'Recomendados sem estoque: N de X'", "status": "done", "progress": "usuario confirmou explicitamente; web/src/App.jsx atualizado" },
-    { "id": 6, "name": "Card 3 (Tecido Preenchido em Tags): extensao de sku, agregacao por Grupo_De_Tecidos, card invertido + Ver Detalhes + export XLSX", "status": "done", "progress": "getLatestSnapshotProducts estendida com sku; buildFabricTagDetail em admin-dashboard.js; buildFabricTagWorkbook em admin-export.js (exceljs); endpoint GET /api/fabric-tags (+?format=xlsx); UI com expansao por grupo" },
-    { "id": 7, "name": "Card 4 (Cron Diario): join ingestion_runs+daily_recompute_log, card com check + data/hora, expansao 7 dias, export XLSX historico completo", "status": "done", "progress": "buildCronLog em admin-dashboard.js (sweep cronologico de write_log para Relacionados historico); buildCronLogWorkbook em admin-export.js; endpoint GET /api/cron-log (+?format=xlsx); UI com tabela dos ultimos 7 dias" },
-    { "id": 8, "name": "Testes + verificacao end-to-end em producao", "status": "done", "progress": "18 testes novos, 293/293 passando; verificado localmente (vite dev + admin-server) e em producao via curl (JSON + xlsx dos 2 endpoints novos + campo novo do dashboard)" }
+    { "id": 1, "name": "Refinamento do Painel Administrativo (4 cards) + export Excel", "status": "done", "progress": "commit 6b383ff, 293/293 testes, verificado em producao" },
+    { "id": 2, "name": "Persistencia do Card 4 (daily_recompute_log)", "status": "done", "progress": "commit 74d22cd, ja capturou dado real (inclusive os 2 aborts do disjuntor documentados na prioridade)" },
+    { "id": 3, "name": "Fix do link do card Recom no Talgui App Center", "status": "done", "progress": "commit ad856ee no repo talgui-app-center" },
+    { "id": 4, "name": "Ferramenta de certificacao do motor (write_log vs recompute fresco)", "status": "done", "progress": "commit d3af5d8, estava sem commit desde inicio da sessao anterior" },
+    { "id": 5, "name": "Versionar .planning/ no git (backup real)", "status": "done", "progress": "commit ffac6e0, 2 senhas redigidas antes de versionar (repo publico)" },
+    { "id": 6, "name": "Fase 9 (Dashboard GA4) formalmente adiada", "status": "done", "progress": "commit bd024d9, decisao explicita do usuario, pesquisa preservada" }
   ],
-  "remaining_tasks": [],
-  "blockers": [],
+  "remaining_tasks": [
+    { "id": 7, "name": "PRIORIDADE: decidir sobre o disjuntor bloqueado (churn/apagao) impedindo escrita automatica desde 2026-08-11", "status": "not_started", "blocking_decision": "usuario precisa decidir: aceitar o apagao real (158 produtos genuinamente sem estoque, 14.7% > limiar 10%) via override manual, ou revisar temporariamente blackoutMax em circuit-breaker.js enquanto durar a promocao" },
+    { "id": 8, "name": "Corrigir categoria de 14 produtos de roupa no admin da Nuvemshop (13 Regata + 1 Casaco -> Blusas/Blazers e Jaquetas)", "status": "not_started", "context": "mesmo bug de categorizacao do EDIT (ja corrigido para 16 produtos antes) -- produtos so tem a colecao Ultimas Oportunidades, sem categoria-folha real. Nao desbloqueia o disjuntor sozinho (estoque zerado ja excede o limiar por si so)." },
+    { "id": 9, "name": "Decidir o que fazer com 'Gloss Talgui' (produto de beleza parado na mesma colecao, nao e roupa)", "status": "not_started", "context": "mesma classe da pendencia 'Lencos' -- produto fora do fechamento dos 3 grupos, precisa decisao de negocio" },
+    { "id": 10, "name": "Reverter MIN_SIZES_IN_STOCK de 1 para o default (3) quando o estoque normalizar", "status": "not_started", "context": "repository variable no GitHub Actions, afrouxada intencionalmente durante a Acao Promocional -- contribui para o volume de churn observado" },
+    { "id": 11, "name": "Priorizar Fase 10 (Migracao NubeSDK) dado o prazo regulatorio de 2026-08-30", "status": "not_started", "context": "0 plans no roadmap, nunca foi planejada -- faltam ~18 dias a partir de 2026-08-12 para o bloqueio de novas instalacoes do Script legado" },
+    { "id": 12, "name": "Housekeeping: fechar formalmente o plano 07-08 da Fase 7 (rollout supervisionado)", "status": "not_started", "context": "funcionalmente ja aconteceu (escritas reais confirmadas em producao), so nao foi executado via /gsd-execute-phase -- nao bloqueia nada" },
+    { "id": 13, "name": "Confirmar com o usuario se storefront-script/main-partners.js foi mesmo consolidado em main.js", "status": "not_started", "context": "achado de sessao anterior, nao urgente, so nomenclatura desatualizada em documentacao" }
+  ],
+  "blockers": [
+    {
+      "description": "Disjuntor (D-63) abortou a escrita automatica em 2026-08-11 06:46 UTC (churn 65.9%>30%) e novamente em 2026-08-12 07:07 UTC (apagao 15.8%>10%). Diagnostico: 158 dos 169 produtos que ficariam sem vitrine estao genuinamente sem estoque (esperado durante a promocao, MIN_SIZES_IN_STOCK=1) -- sozinhos ja excedem o limiar de 10%. Os outros 15 sao produtos sem categoria-folha real (13 Regata + 1 Casaco + 1 Gloss Talgui, que nem e roupa).",
+      "type": "operational",
+      "workaround": "Nao ha correcao automatica -- requer decisao humana: (1) aceitar o apagao real via override manual (workflow_dispatch com ajuste), ou (2) revisar temporariamente blackoutMax em src/review/circuit-breaker.js enquanto durar a promocao. Corrigir a categoria dos 14 produtos de roupa ajuda a qualidade do dado mas NAO desbloqueia sozinho (o volume de estoque zerado ja excede o limiar). Sem risco de corrupcao de dado -- o disjuntor so bloqueia escrita, a vitrine so fica desatualizada."
+    }
+  ],
   "async_jobs": [],
-  "human_actions_pending": [],
+  "human_actions_pending": [
+    { "action": "Decidir sobre o disjuntor bloqueado (ver blockers)", "context": "prioridade #1 do handoff", "blocking": true },
+    { "action": "Corrigir categoria de 14 produtos no admin da Nuvemshop (13 Regata + 1 Casaco)", "context": "mesmo processo ja feito para os 16 produtos do EDIT antes", "blocking": false },
+    { "action": "Decidir sobre 'Gloss Talgui' e a pendencia antiga 'Lencos' (mesma classe de problema)", "context": "produtos fora do fechamento dos 3 grupos de roupa", "blocking": false },
+    { "action": "Reverter MIN_SIZES_IN_STOCK quando o estoque normalizar", "context": "repository variable no GitHub Actions", "blocking": false }
+  ],
   "decisions": [
-    { "decision": "Card 2: usuario confirmou explicitamente antes da implementacao", "rationale": "unidades somadas (18.070un) nao tinha valor analitico isolado; zeroStockCount ja era calculado no backend e reflete um risco operacional real (produto sem estoque visivel no carrossel, confirmado no codigo)", "phase": "none" },
-    { "decision": "Nomes de coluna dos exports (Card 3/4) seguem os arquivos .xlsx de exemplo do usuario literalmente, nao o resumo em texto da conversa", "rationale": "os nomes reais na planilha diferem do resumo em texto (ex: 'Grupo_De_Tecidos' em vez de 'TECIDOS')", "phase": "none" },
-    { "decision": "daily_recompute_log.run_id e NULLABLE por design", "rationale": "a ingestao pode falhar (excecao de rede) ANTES de criar uma linha em ingestion_runs (caso real: incidente 2026-07-23) -- sem essa nulidade, esse cenario ficaria sem nenhum registro no log de cron", "phase": "none" },
-    { "decision": "if: always() adicionado aos passos de sincronizar catalogo vendorizado e commit-back no workflow YAML", "rationale": "sem isso, o GitHub Actions pula esses passos quando o passo de ingestao falha (exit 1), entao um registro de erro no daily_recompute_log nunca chegaria ao git -- so ficaria preso no runner efemero", "phase": "none" },
-    { "decision": "Export gerado com exceljs, nao xlsx/SheetJS", "rationale": "auditoria de pacote (npm audit) encontrou 2 vulnerabilidades HIGH sem correcao disponivel em xlsx (prototype pollution + ReDoS no parsing); exceljs so tem 2 MODERATE transitivas via uuid, nao exploraveis pelo uso que fazemos (so geramos arquivos, nunca parseamos .xlsx de terceiros)", "phase": "none" },
-    { "decision": "Geracao do Excel 100% server-side (Vercel function), nao client-side", "rationale": "evita bundlar uma biblioteca de excel pesada no cliente (bundle nao cresceu); reaproveita o mesmo padrao de vendoring ja usado por catalog-store.js/admin-dashboard.js", "phase": "none" }
+    { "decision": "Nao fazer override manual do disjuntor nesta sessao", "rationale": "usuario preferiu deixar a decisao para a proxima sessao -- sem risco de dado, so staleness da vitrine", "phase": "none" },
+    { "decision": "'Regata' e 'Casaco Raquel' confirmados como Partes de Cima (Blusas/Blazers e Jaquetas) pelo usuario", "rationale": "sao pecas de roupa reais, faltando so a tag de categoria correta no admin -- mesmo padrao do EDIT", "phase": "none" },
+    { "decision": "'Gloss Talgui' NAO foi mapeado -- ficou como pendencia de decisao de negocio", "rationale": "nao e produto de roupa, mesma classe da pendencia 'Lencos' ja existente", "phase": "none" }
   ],
   "uncommitted_files": [],
-  "next_action": "Nenhuma acao pendente deste trabalho -- concluido e verificado em producao (commit 6b383ff). Unico item de acompanhamento futuro (nao bloqueante): confirmar que o Card 4 (Daily_Recompute) populou 'OK'/'ERROR' a partir do cron de 2026-08-11 em diante -- hoje (10/08) ainda mostra '-' pois a persistencia so comecou a valer depois do cron de hoje ter rodado.",
-  "context_notes": "Sessao de refinamento pratico apos o usuario usar o painel administrativo real em producao pela primeira vez (construido em sessao anterior, D-71 a D-74). Retomada e concluida na MESMA sessao (usuario decidiu nao migrar de conta e continuar direto). Achado tecnico relevante fora do escopo direto: storefront-script/main-partners.js (citado em sessoes anteriores) nao existe mais na pasta -- parece ter sido consolidado dentro de main.js em outra sessao entre 2026-08-06 e 2026-08-07 (mesmo tamanho de arquivo). O script publicado/ativo hoje e main.js. Nao bloqueia nada, so vale confirmar com o usuario quando puder. Fase 9 (Dashboard GA4) continua formalmente adiada (ver ROADMAP.md) -- este handoff nao tem nenhuma relacao com ela."
+  "next_action": "Resolver a prioridade do disjuntor bloqueado primeiro (ver <priority> em .continue-here.md). Depois, considerar priorizar a Fase 10 (NubeSDK) dado o prazo de 2026-08-30 se aproximando (~18 dias a partir de 2026-08-12).",
+  "context_notes": "Handoff abrangente cobrindo o projeto inteiro (nao so a ultima tarefa), escrito a pedido explicito do usuario para retomada em sessao de conta pessoal. A investigacao do disjuntor foi feita nesta sessao com scripts de diagnostico temporarios (nao commitados, script de referencia documentado em .continue-here.md <how_to_reproduce> para recriar se necessario). O daily_recompute_log (Card 4 do painel) ja provou seu valor pratico: foi ele que revelou os 2 aborts do disjuntor que motivaram toda essa investigacao."
 }
