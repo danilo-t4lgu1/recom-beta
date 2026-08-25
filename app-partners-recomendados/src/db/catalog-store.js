@@ -214,6 +214,17 @@ const selectAllWriteLogStmt = db.prepare(
   `SELECT * FROM write_log ORDER BY written_at DESC`
 );
 
+// Achado 2026-08-25: base do escalonamento do disjuntor por "dias sem sucesso"
+// (D-63 revisão) — o `MAX(written_at)` GLOBAL entre TODAS as linhas 'success' de
+// `write_log` (não por produto, ver `selectLastWrittenValuesStmt` abaixo). Sem
+// isso, o disjuntor comparava churn acumulado de N dias contra um limiar fixo de
+// 1 dia, o que se autoperpetuava: um abort congela o baseline, o que aumenta o
+// churn do dia seguinte, que aborta de novo (visto na prática: 14 aborts
+// seguidos, 11/08→25/08, churn subindo de 68% a 87,6%).
+const selectLastSuccessfulWriteTimestampStmt = db.prepare(
+  `SELECT MAX(written_at) AS ts FROM write_log WHERE status = 'success'`
+);
+
 // Painel administrativo (achado 2026-08-10): registra o resultado da etapa de
 // RECOMPUTE/ESCRITA do job diário, distinto de ingestion_runs.status (etapa de
 // INGESTÃO). Append-only, mesma disciplina de write_log — nunca update/upsert.
@@ -675,6 +686,21 @@ export function getLastWrittenValuesForAllProducts() {
     map.set(String(row.product_id), values);
   }
   return map;
+}
+
+/**
+ * Timestamp (ISO 8601, `written_at`) da última linha `status='success'` em
+ * `write_log`, GLOBAL (qualquer produto) — não confundir com
+ * `getLastWrittenValuesForAllProducts`, que é por produto. Alimenta o
+ * escalonamento do disjuntor por dias-desde-último-sucesso (D-63 revisão,
+ * achado 2026-08-25). `null` quando nunca houve nenhuma escrita bem-sucedida
+ * (1º rollout — já isento do disjuntor via `isFirstRollout`, então o chamador
+ * não precisa tratar esse caso de forma especial).
+ * @returns {string|null}
+ */
+export function getLastSuccessfulWriteTimestamp() {
+  const row = selectLastSuccessfulWriteTimestampStmt.get();
+  return row && row.ts != null ? row.ts : null;
 }
 
 /**

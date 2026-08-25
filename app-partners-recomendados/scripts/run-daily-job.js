@@ -34,6 +34,7 @@ import {
   getLastSuccessfulIngestionRunSummary,
   insertDailyRecomputeLog,
   getLastWrittenValuesForAllProducts,
+  getLastSuccessfulWriteTimestamp,
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
 import { notifyWriteFailure, notifyDailySummary } from '../src/review/notify-failure.js';
@@ -249,9 +250,24 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
     }
   }
 
+  // Escalonamento por dias-sem-sucesso (D-63 revisão, achado 2026-08-25): sem
+  // isso, um abort congela `writeBaseline` (só avança em sucesso) e o churn do
+  // dia seguinte é medido contra o MESMO limiar de 1 dia — quase garantindo outro
+  // abort (visto na prática: 11→25/08, 14 aborts seguidos, churn 68%→87,6%).
+  // `null` (nunca houve sucesso) => sem escalonamento, tripBreaker trata como 1 dia.
+  const lastSuccessTs = getLastSuccessfulWriteTimestamp();
+  const daysSinceLastSuccess = lastSuccessTs
+    ? Math.max(1, (Date.now() - new Date(lastSuccessTs).getTime()) / 86_400_000)
+    : null;
+
   // Disjuntor (D-63): mede churn/apagão do conjunto completo vs. o último valor
   // gravado por produto; aborta+notifica se exceder o limiar (1º rollout isento).
-  const breaker = tripBreaker({ toWrite: computed, baseline: writeBaseline, isFirstRollout });
+  const breaker = tripBreaker({
+    toWrite: computed,
+    baseline: writeBaseline,
+    isFirstRollout,
+    daysSinceLastSuccess,
+  });
   if (breaker.trip) {
     console.error(`runDailyJob: disjuntor abortou a escrita — ${breaker.reason}`);
     await notifyWriteFailure({

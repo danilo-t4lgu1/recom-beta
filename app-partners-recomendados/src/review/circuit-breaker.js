@@ -34,6 +34,24 @@ export function setsEqual(a, b) {
 }
 
 /**
+ * Escala um limiar-base pelos dias decorridos desde o último sucesso, até um
+ * teto absoluto — achado 2026-08-25 (D-63 revisão): sem isso, um abort congela
+ * o baseline (`getLastWrittenValuesForAllProducts` só avança em sucesso), o que
+ * infla o churn do dia seguinte contra o MESMO limiar fixo e quase garante outro
+ * abort — visto na prática (11→25/08/2026: 14 aborts seguidos, churn subindo de
+ * 68% a 87,6% dia após dia, nunca convergindo sozinho). `daysSinceLastSuccess`
+ * nulo/≤1 não escala (comportamento idêntico ao pré-revisão).
+ * @param {number} base
+ * @param {number|null|undefined} daysSinceLastSuccess
+ * @param {number} ceiling
+ * @returns {number}
+ */
+function scaleThreshold(base, daysSinceLastSuccess, ceiling) {
+  const days = Number.isFinite(daysSinceLastSuccess) && daysSinceLastSuccess > 1 ? daysSinceLastSuccess : 1;
+  return Math.min(base * days, ceiling);
+}
+
+/**
  * Decide se o disjuntor deve DISPARAR (abortar a escrita) para um batch diário.
  *
  * @param {{
@@ -42,6 +60,9 @@ export function setsEqual(a, b) {
  *   isFirstRollout?: boolean,
  *   churnMax?: number,
  *   blackoutMax?: number,
+ *   daysSinceLastSuccess?: number|null,
+ *   churnCeiling?: number,
+ *   blackoutCeiling?: number,
  * }} params
  *   - `toWrite`: conjunto calculado para ESTE run (um item por produto-fonte
  *     considerado; `recommendedIds` é o conjunto novo, `[]` significa vitrine
@@ -50,8 +71,15 @@ export function setsEqual(a, b) {
  *   - `baseline`: `Map<productId, ids[]>` do último valor gravado por produto
  *     (`getLastWrittenValuesForAllProducts`). Produto sem entrada = `[]`.
  *   - `isFirstRollout`: quando true, NUNCA dispara (isenção D-63/D-64).
- *   - `churnMax` (default 0.30) / `blackoutMax` (default 0.10): limiares à
- *     discrição (D-63), ajustáveis.
+ *   - `churnMax` (default 0.30) / `blackoutMax` (default 0.10): limiares-base
+ *     para 1 dia de defasagem, à discrição (D-63), ajustáveis.
+ *   - `daysSinceLastSuccess`: dias corridos desde o último `write_log` com
+ *     `status='success'` (`getLastSuccessfulWriteTimestamp`), calculado pelo
+ *     CHAMADOR (módulo permanece puro/zero-I/O/zero-relógio). `null`/`undefined`/
+ *     `≤1` => sem escalonamento, idêntico ao comportamento pré-revisão.
+ *   - `churnCeiling` (default 0.90) / `blackoutCeiling` (default 0.50): teto
+ *     absoluto do escalonamento — o disjuntor nunca fica inteiramente inerte,
+ *     mesmo com muitos dias acumulados.
  * @returns {{ trip: boolean, reason?: string }}
  */
 export function tripBreaker({
@@ -60,6 +88,9 @@ export function tripBreaker({
   isFirstRollout = false,
   churnMax = 0.3,
   blackoutMax = 0.1,
+  daysSinceLastSuccess = null,
+  churnCeiling = 0.9,
+  blackoutCeiling = 0.5,
 }) {
   if (isFirstRollout) {
     return { trip: false, reason: '1º rollout supervisionado — disjuntor isento (D-63/D-64)' };
@@ -86,16 +117,19 @@ export function tripBreaker({
   const churn = total > 0 ? changed / total : 0;
   const blackout = hadBefore > 0 ? blackedOut / hadBefore : 0;
 
-  if (churn > churnMax) {
+  const effectiveChurnMax = scaleThreshold(churnMax, daysSinceLastSuccess, churnCeiling);
+  const effectiveBlackoutMax = scaleThreshold(blackoutMax, daysSinceLastSuccess, blackoutCeiling);
+
+  if (churn > effectiveChurnMax) {
     return {
       trip: true,
-      reason: `churn ${(churn * 100).toFixed(1)}% > ${(churnMax * 100).toFixed(0)}% — escrita em massa abortada (D-63)`,
+      reason: `churn ${(churn * 100).toFixed(1)}% > ${(effectiveChurnMax * 100).toFixed(0)}% — escrita em massa abortada (D-63)`,
     };
   }
-  if (blackout > blackoutMax) {
+  if (blackout > effectiveBlackoutMax) {
     return {
       trip: true,
-      reason: `apagão ${(blackout * 100).toFixed(1)}% > ${(blackoutMax * 100).toFixed(0)}% — abortado para não esvaziar a vitrine (D-63)`,
+      reason: `apagão ${(blackout * 100).toFixed(1)}% > ${(effectiveBlackoutMax * 100).toFixed(0)}% — abortado para não esvaziar a vitrine (D-63)`,
     };
   }
 

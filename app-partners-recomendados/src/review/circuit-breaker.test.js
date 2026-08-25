@@ -122,3 +122,66 @@ describe('tripBreaker (disjuntor D-63)', () => {
     expect(tripBreaker({ toWrite, baseline, isFirstRollout: false, churnMax: 0.1 }).trip).toBe(true);
   });
 });
+
+describe('tripBreaker — escalonamento por dias-sem-sucesso (D-63 revisão, 2026-08-25)', () => {
+  // Achado: um abort congela o baseline (write_log só avança em sucesso); sem
+  // escalonar o limiar pelos dias decorridos, o churn acumulado de N dias é
+  // medido contra o mesmo limiar de 1 dia e o disjuntor nunca destrava sozinho
+  // (visto na prática: 11→25/08/2026, 14 aborts seguidos, churn 68%→87,6%).
+
+  function churnToWriteAt(fraction, total = 10) {
+    const toWrite = [];
+    const base = {};
+    const changedCount = Math.round(fraction * total);
+    for (let i = 0; i < total; i++) {
+      const id = `p${i}`;
+      base[id] = ['old'];
+      toWrite.push({ productId: id, recommendedIds: i < changedCount ? ['new'] : ['old'] });
+    }
+    return { toWrite, baseline: baselineOf(base) };
+  }
+
+  it('daysSinceLastSuccess ausente/≤1: comportamento idêntico ao pré-revisão (churn 40% dispara)', () => {
+    const { toWrite, baseline } = churnToWriteAt(0.4);
+    expect(tripBreaker({ toWrite, baseline, isFirstRollout: false }).trip).toBe(true);
+    expect(tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 1 }).trip).toBe(true);
+    expect(tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 0.5 }).trip).toBe(true);
+  });
+
+  it('churn 40% NÃO dispara com 2 dias sem sucesso (limiar efetivo escala para 60%)', () => {
+    const { toWrite, baseline } = churnToWriteAt(0.4);
+    const result = tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 2 });
+    expect(result.trip).toBe(false);
+  });
+
+  it('churn 68% (caso real de 13/08) dispara com 1 dia mas passa com 3 dias', () => {
+    const { toWrite, baseline } = churnToWriteAt(0.68, 100);
+    expect(tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 1 }).trip).toBe(true);
+    expect(tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 3 }).trip).toBe(false);
+  });
+
+  it('teto absoluto (churnCeiling): mesmo com muitos dias acumulados, churn 95% ainda dispara', () => {
+    const { toWrite, baseline } = churnToWriteAt(0.95, 100);
+    // 100 dias * 30% estouraria muito o teto sem o cap — churnCeiling (default 90%) prevalece.
+    const result = tripBreaker({ toWrite, baseline, isFirstRollout: false, daysSinceLastSuccess: 100 });
+    expect(result.trip).toBe(true);
+    expect(result.reason).toMatch(/90%/);
+  });
+
+  it('apagão também escala: 20% de apagão não dispara com 3 dias sem sucesso (limiar efetivo 30%)', () => {
+    const toWrite = [];
+    const base = {};
+    for (let i = 0; i < 10; i++) {
+      const id = `p${i}`;
+      base[id] = ['old'];
+      toWrite.push({ productId: id, recommendedIds: i < 2 ? [] : ['old'] });
+    }
+    const result = tripBreaker({
+      toWrite,
+      baseline: baselineOf(base),
+      isFirstRollout: false,
+      daysSinceLastSuccess: 3,
+    });
+    expect(result.trip).toBe(false);
+  });
+});
