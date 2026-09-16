@@ -46,6 +46,12 @@ export default async function handler(req, res) {
     const result = await getRecommendations(productId);
     res.status(200).json(result);
   } catch (err) {
+    // Logado para os Function Logs da Vercel — o corpo de resposta ao cliente
+    // continua genérico (nunca expõe detalhe interno/token), mas sem este log
+    // uma falha upstream na Nuvemshop (401/403/429, etc.) fica impossível de
+    // diagnosticar depois do fato (incidente 2026-09-16: token vazio na env
+    // var de produção derrubou 100% das chamadas sem nenhuma pista no log).
+    console.error(`GET /api/recommendations/${productId} falhou:`, err.message);
     res.status(500).json({ error: 'Internal error fetching recommendations' });
   }
 }
