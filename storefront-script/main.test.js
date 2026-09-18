@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getCachedRecommendation, setCachedRecommendation } from './main.js';
+import { getCachedRecommendation, setCachedRecommendation, shouldShowLookFlag } from './main.js';
 
 // Storage fake simples apoiado num objeto JS puro (sem Map/classe, mesmo
 // estilo do resto do projeto) - implementa so o subset usado por main.js.
@@ -97,6 +97,41 @@ describe('setCachedRecommendation', function () {
 
     expect(function () {
       setCachedRecommendation(storage, '349886153', { recommendedProductId: '1' }, 1000000);
+    }).not.toThrow();
+  });
+});
+
+describe('shouldShowLookFlag', function () {
+  it('retorna true quando index e 0 e product.isProvenLook e true', function () {
+    var product = { id: '1', isProvenLook: true };
+    expect(shouldShowLookFlag(product, 0)).toBe(true);
+  });
+
+  it('retorna false quando index e 0 mas product.isProvenLook e false', function () {
+    var product = { id: '1', isProvenLook: false };
+    expect(shouldShowLookFlag(product, 0)).toBe(false);
+  });
+
+  it('retorna false quando index e 0 mas product.isProvenLook esta ausente', function () {
+    var product = { id: '1' };
+    expect(shouldShowLookFlag(product, 0)).toBe(false);
+  });
+
+  it('retorna false quando index e maior que 0, mesmo com isProvenLook true (nunca em outro card)', function () {
+    var product = { id: '2', isProvenLook: true };
+    expect(shouldShowLookFlag(product, 1)).toBe(false);
+    expect(shouldShowLookFlag(product, 2)).toBe(false);
+  });
+
+  it('retorna false (nunca lanca) quando product e null', function () {
+    expect(function () {
+      expect(shouldShowLookFlag(null, 0)).toBe(false);
+    }).not.toThrow();
+  });
+
+  it('retorna false (nunca lanca) quando product e undefined', function () {
+    expect(function () {
+      expect(shouldShowLookFlag(undefined, 0)).toBe(false);
     }).not.toThrow();
   });
 });
