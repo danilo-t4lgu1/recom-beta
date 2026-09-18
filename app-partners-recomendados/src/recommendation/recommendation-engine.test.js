@@ -32,6 +32,7 @@ function makeProduct({
   variants = [],
   productGroupCanonical = GROUP_LOOK_INTEIRO,
   published = true,
+  provenLookPartnerIds = [],
 } = {}) {
   productCounter += 1;
   return {
@@ -43,6 +44,7 @@ function makeProduct({
     variants,
     productGroupCanonical,
     published,
+    provenLookPartnerIds,
   };
 }
 
@@ -171,6 +173,7 @@ describe('recommendForProduct - elegibilidade estrita e objetos ricos (Task 1)',
         'centralSizesStock',
         'colorValue',
         'fabricTagCanonical',
+        'matchReason',
         'productGroupCanonical',
         'productId',
         'sizesWithStock',
@@ -708,5 +711,187 @@ describe('recommendForProduct - visibilidade published (D-58)', () => {
 
     const result = recommendForProduct('1', [source, preMigration, undefinedPublished]);
     expect(result.map((r) => r.productId).sort()).toEqual(['2', '3']);
+  });
+});
+
+describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (provenLookPartnerIds)', () => {
+  it('par comprovado (mesmo sem cor batendo) aparece antes de qualquer peso 1/2', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [{ productId: '21', count: 5 }],
+    });
+    // Peso 0: cor DIFERENTE da fonte, ainda assim elegível — único caso sem
+    // exigência de cor.
+    const provenLook = makeProduct({
+      productId: '21',
+      colorValue: 'Vermelho',
+      fabricTagCanonical: null,
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
+    });
+    // Peso 2: cor bate, estoque MAIOR que o par comprovado — ainda assim deve
+    // ficar depois, pois peso 0 > qualquer estoque de peso 1/2.
+    const weight2 = makeProduct({
+      productId: '22',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 100000 })],
+    });
+
+    const result = recommendForProduct('1', [source, provenLook, weight2]);
+
+    expect(result.map((r) => r.productId)).toEqual(['21', '22']);
+    expect(result[0].matchReason).toBe('proven_look');
+    expect(result[1].matchReason).toBe('color_stock');
+  });
+
+  it('par comprovado mas candidato sem estoque (hasAvailableGrade: false) NUNCA aparece', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [{ productId: '21', count: 5 }],
+    });
+    const noStock = makeProduct({
+      productId: '21',
+      colorValue: 'Vermelho',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      hasAvailableGrade: false,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
+    });
+
+    const result = recommendForProduct('1', [source, noStock]);
+    expect(result).toEqual([]);
+  });
+
+  it('par comprovado mas candidato despublicado (published: false) NUNCA aparece', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [{ productId: '21', count: 5 }],
+    });
+    const hidden = makeProduct({
+      productId: '21',
+      colorValue: 'Vermelho',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      published: false,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
+    });
+
+    const result = recommendForProduct('1', [source, hidden]);
+    expect(result).toEqual([]);
+  });
+
+  it('dois pares comprovados pro mesmo produto-fonte são ordenados por count desc entre si', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [
+        { productId: '21', count: 3 },
+        { productId: '22', count: 10 },
+      ],
+    });
+    const lowerCount = makeProduct({
+      productId: '21',
+      colorValue: 'Azul',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+    const higherCount = makeProduct({
+      productId: '22',
+      colorValue: 'Verde',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+
+    const result = recommendForProduct('1', [source, lowerCount, higherCount]);
+    expect(result.map((r) => r.productId)).toEqual(['22', '21']);
+    expect(result.every((r) => r.matchReason === 'proven_look')).toBe(true);
+  });
+
+  it('sem nenhum par comprovado (ausente ou []), comportamento idêntico ao anterior', () => {
+    const sourceUndefined = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+    });
+    const sourceEmptyArray = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [],
+    });
+    const sameGroupCandidate = makeProduct({
+      productId: '11',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+    const crossGroupCandidate = makeProduct({
+      productId: '21',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 5 })],
+    });
+
+    const resultUndefined = recommendForProduct('1', [sourceUndefined, sameGroupCandidate, crossGroupCandidate]);
+    const resultEmptyArray = recommendForProduct('1', [sourceEmptyArray, sameGroupCandidate, crossGroupCandidate]);
+
+    expect(resultUndefined.map((r) => r.productId)).toEqual(['11', '21']);
+    expect(resultEmptyArray.map((r) => r.productId)).toEqual(['11', '21']);
+    expect(resultUndefined).toEqual(resultEmptyArray);
+  });
+
+  it('matchReason correto em cada nível (proven_look/same_fabric/color_stock)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [{ productId: '31', count: 4 }],
+    });
+    const provenLookCandidate = makeProduct({
+      productId: '31',
+      colorValue: 'Amarelo',
+      fabricTagCanonical: null,
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+    const sameFabricCandidate = makeProduct({
+      productId: '11',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+    const colorStockCandidate = makeProduct({
+      productId: '32',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
+    });
+
+    const result = recommendForProduct('1', [
+      source,
+      provenLookCandidate,
+      sameFabricCandidate,
+      colorStockCandidate,
+    ]);
+
+    const byId = new Map(result.map((r) => [r.productId, r.matchReason]));
+    expect(byId.get('31')).toBe('proven_look');
+    expect(byId.get('11')).toBe('same_fabric');
+    expect(byId.get('32')).toBe('color_stock');
   });
 });

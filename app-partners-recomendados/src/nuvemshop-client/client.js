@@ -256,3 +256,48 @@ export async function listAllProducts({ page = 1, perPage = 200, limiter } = {})
 
   return { products, hasNextPage };
 }
+
+/**
+ * Lista pedidos da loja Talgui via GET /orders, paginado (mesmo padrão de
+ * `listAllProducts`). Usa `status=any` deliberadamente — o filtro de "pedido
+ * válido" para a análise de co-compra (cancelado? pago?) é responsabilidade da
+ * camada de ingestão (`ingest-orders.js`), nunca deste client: um pedido aberto
+ * ou não pago ainda é um pedido real que precisa ser lido e contabilizado em
+ * `orders` (histórico completo), mesmo que fique de fora de `order_items`.
+ * `hasNextPage` segue a mesma dupla checagem de `listAllProducts` (header `link`
+ * com `rel="next"` OU `orders.length === perPage`) — nunca assumir só uma das
+ * duas (confirmado no header real da API: `link: <...page=2...>; rel="next", ...`).
+ *
+ * `createdAtMax` (opcional): repassado como `created_at_max` — usado por
+ * `ingest-orders.js` para "janelar" pedidos por data quando a loja tem mais de 10.000
+ * pedidos (achado em execução real, 2026-09-16: `GET /orders?page=51&per_page=200`
+ * falha com HTTP 422 "Query exceeds max allowed limit of 10000" — a API não pagina
+ * por offset além desse teto, mesmo existindo mais pedidos). Este client não sabe
+ * nada sobre esse teto nem sobre janelamento — só repassa o filtro quando informado,
+ * mesma responsabilidade de "wrapper fino" das demais funções deste arquivo.
+ * @param {{ page?: number, perPage?: number, limiter?: import('../rate-limit/adaptive-limiter.js').AdaptiveRateLimiter, createdAtMax?: string }} params
+ * @returns {Promise<{ orders: Array<object>, hasNextPage: boolean }>}
+ */
+export async function listOrders({ page = 1, perPage = 200, limiter, createdAtMax } = {}) {
+  const { accessToken, storeId } = getAccessToken();
+  let url =
+    `${API_BASE}/${storeId}/orders?page=${encodeURIComponent(page)}` +
+    `&per_page=${encodeURIComponent(perPage)}&status=any`;
+  if (createdAtMax) {
+    url += `&created_at_max=${encodeURIComponent(createdAtMax)}`;
+  }
+
+  const response = await fetchWithRateLimit(
+    url,
+    { method: 'GET', headers: buildHeaders(accessToken) },
+    limiter
+  );
+
+  await assertOk(response, `GET ${url}`);
+
+  const orders = await response.json();
+  const linkHeader = response.headers.get('link') || '';
+  const hasNextPage = linkHeader.includes('rel="next"') || orders.length === perPage;
+
+  return { orders, hasNextPage };
+}

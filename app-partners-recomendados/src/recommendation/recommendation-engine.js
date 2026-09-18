@@ -23,6 +23,18 @@
 // A cor permanece sempre obrigatória; o bloco cruzado (D-28) nunca considera
 // tecido, por desenho (D-26 a D-30).
 //
+// Modelo de 3 pesos, "Sugestão de Look Automática" (decisão de negócio já
+// validada): dentro do bloco CRUZADO apenas, um PESO 0 foi adicionado acima dos
+// pesos 1/2 — candidatos cujo par com a fonte já foi comprado junto em >= N
+// pedidos reais (`provenLookPartnerIds`, enriquecido fora do motor por
+// `catalog-store.js` a partir de `co_purchase_pairs`, RULE-02). Peso 0 é o ÚNICO
+// caso do motor inteiro sem exigência de cor — o sinal já é evidência de compra
+// real, não inferência por atributo. Estoque + visibilidade continuam obrigatórios
+// mesmo para peso 0 (`isEligibleProvenLookCandidate`). Ordenação de peso 0 entre
+// si: maior `count` do par primeiro, depois a mesma cascata D-13, depois
+// productId asc. `matchReason` (`'proven_look'|'same_fabric'|'color_stock'`)
+// expõe o peso de cada recomendação no objeto de retorno (D-18 estendido).
+//
 // Visibilidade (D-58): candidato com `published === false` nunca é recomendado
 // (link levaria a 404); produto-fonte com `published === false` não gera vitrine
 // (`recommendForProduct` retorna []). A comparação é estritamente `=== false` —
@@ -71,6 +83,7 @@
  * @property {boolean} hasAvailableGrade - resultado D-04 persistido na ingestão
  * @property {boolean} published - flag de visibilidade da API persistido na ingestão (D-58); só `=== false` é oculto, `null`/`undefined` (pré-migração) nunca
  * @property {Array<{variantId: string, sizeValue: string|null, stockTotal: number}>} variants
+ * @property {Array<{productId: string, count: number}>} [provenLookPartnerIds] - ids+count dos parceiros de look CROSS-GROUP comprovados por co-compra real (pedidos), já enriquecido por catalog-store.js a partir de `co_purchase_pairs`; ausente ou `[]` == nenhum par comprovado (retrocompatível). Sinal de prioridade MÁXIMA (peso 0) no bloco cruzado — ÚNICO caso do motor em que cor não é exigida (ver `isEligibleProvenLookCandidate`)
  */
 
 /**
@@ -83,6 +96,7 @@
  * @property {number} sizesWithStock - contagem de variantes com stockTotal > 0 (nível 2)
  * @property {number} centralSizesStock - soma de stockTotal nos tamanhos centrais (nível 3)
  * @property {Array<{sizeValue: string|null, stock: number}>} stockBySize - distribuição por grade (D-18)
+ * @property {'proven_look'|'same_fabric'|'color_stock'} matchReason - explica o nível/peso do match: 'proven_look' (peso 0, par comprovado por co-compra real, único caso sem exigência de cor), 'same_fabric' (peso 1, E+C+T), 'color_stock' (peso 2, E+C). Alimenta o rótulo "Sugestão de Look Automática" no painel administrativo (não construído nesta fase)
  */
 
 /** RULE-01: limite máximo de recomendações por produto, nunca valor mágico inline. */
@@ -186,6 +200,77 @@ function candidateWeight(source, candidate, considerFabric) {
 }
 
 /**
+ * Traduz o peso numérico (1|2) para o rótulo `matchReason` exposto no objeto de
+ * retorno (D-18 estendido): peso 1 => 'same_fabric' (E+C+T), peso 2 =>
+ * 'color_stock' (E+C). Peso 0 ('proven_look') nunca passa por aqui — é atribuído
+ * diretamente em `buildProvenLookPool`, que não usa `candidateWeight`.
+ * @param {1|2} weight
+ * @returns {'same_fabric'|'color_stock'}
+ */
+function weightToMatchReason(weight) {
+  return weight === 1 ? 'same_fabric' : 'color_stock';
+}
+
+/**
+ * Verifica se `candidate` é elegível como candidato de PESO 0 ("Sugestão de Look
+ * Automática", sinal de co-compra real) dentro do grupo cruzado `crossGroup`.
+ * Mesmo piso de Estoque + Visibilidade + Grupo de `isEligibleCandidateInGroup`,
+ * MAS DELIBERADAMENTE SEM exigência de cor — este é o ÚNICO caso do motor inteiro
+ * onde cor não é exigida, porque o sinal já é evidência de compra real (pares
+ * vendidos juntos repetidamente), não uma inferência por atributo (cor/tecido).
+ * Decisão de negócio já validada: `count >= minCount` (piso configurável na
+ * persistência, `orders-store.js`) é considerado suficiente por si só.
+ * @param {CatalogProductEntry} source
+ * @param {CatalogProductEntry} candidate
+ * @param {string|null} crossGroup
+ * @returns {boolean}
+ */
+function isEligibleProvenLookCandidate(source, candidate, crossGroup) {
+  if (!candidate) return false;
+  if (String(candidate.productId) === String(source.productId)) return false;
+  if (!candidate.hasAvailableGrade) return false;
+  if (candidate.published === false) return false;
+  if (candidate.productGroupCanonical !== crossGroup) return false;
+  return true;
+}
+
+/**
+ * Monta e ordena o pool de candidatos de PESO 0 ("Sugestão de Look Automática")
+ * a partir de `source.provenLookPartnerIds` (enriquecido fora do motor por
+ * `catalog-store.js`, RULE-02) — array vazio/ausente (nenhum par comprovado)
+ * devolve `[]` imediatamente, sem tocar `catalog` (retrocompatibilidade total).
+ * Ordenação (ver Tarefa 4): 1) maior `count` do par; 2) empate: cascata D-13
+ * (`compareRecommendations`, que já termina em productId asc como guarda de
+ * determinismo). Função interna, não exportada — entra PRIMEIRO na cota do
+ * bloco cruzado, antes do pool de peso 1/2 (`buildSortedPool`).
+ * @param {CatalogProductEntry} source
+ * @param {CatalogProductEntry[]} catalog
+ * @param {string|null} crossGroup
+ * @returns {Recommendation[]}
+ */
+function buildProvenLookPool(source, catalog, crossGroup) {
+  const partners = Array.isArray(source.provenLookPartnerIds) ? source.provenLookPartnerIds : [];
+  if (partners.length === 0) return [];
+
+  const countByPartnerId = new Map(
+    partners.map((partner) => [String(partner.productId), partner.count])
+  );
+
+  return catalog
+    .filter(
+      (candidate) =>
+        countByPartnerId.has(String(candidate.productId)) &&
+        isEligibleProvenLookCandidate(source, candidate, crossGroup)
+    )
+    .map((candidate) => ({
+      rec: { ...buildRecommendation(candidate), matchReason: 'proven_look' },
+      count: countByPartnerId.get(String(candidate.productId)),
+    }))
+    .sort((a, b) => b.count - a.count || compareRecommendations(a.rec, b.rec))
+    .map((entry) => entry.rec);
+}
+
+/**
  * Monta e ordena o pool de candidatos elegíveis de um grupo-alvo específico
  * dentro do `catalog`. Ordenação em duas chaves (D-56): PRIMÁRIA por peso
  * ascendente (`candidateWeight` — peso 1 antes de peso 2); SECUNDÁRIA, dentro de
@@ -201,10 +286,13 @@ function candidateWeight(source, candidate, considerFabric) {
 function buildSortedPool(source, catalog, targetGroup, { considerFabric }) {
   return catalog
     .filter((candidate) => isEligibleCandidateInGroup(source, candidate, targetGroup))
-    .map((candidate) => ({
-      rec: buildRecommendation(candidate),
-      weight: candidateWeight(source, candidate, considerFabric),
-    }))
+    .map((candidate) => {
+      const weight = candidateWeight(source, candidate, considerFabric);
+      return {
+        rec: { ...buildRecommendation(candidate), matchReason: weightToMatchReason(weight) },
+        weight,
+      };
+    })
     .sort((a, b) => a.weight - b.weight || compareRecommendations(a.rec, b.rec))
     .map((entry) => entry.rec);
 }
@@ -422,7 +510,19 @@ export function recommendForProduct(
   // (mesmo tecido = peso 1, resto peso 2, D-55/D-56); bloco cruzado nunca
   // considera tecido (D-28, tudo peso 2). Ambos os blocos partem do piso E+C.
   const samePool = buildSortedPool(source, catalog, sourceGroup, { considerFabric: true });
-  const crossPool = buildSortedPool(source, catalog, crossGroup, { considerFabric: false });
+
+  // Sinal de "Sugestão de Look Automática" (peso 0, prioridade MÁXIMA): pares
+  // cross-group comprovados por co-compra real entram PRIMEIRO no pool cruzado,
+  // à frente de qualquer candidato de peso 1/2 — único caso do motor sem
+  // exigência de cor (ver `isEligibleProvenLookCandidate`). Candidatos já
+  // capturados aqui são removidos do pool de peso 1/2 abaixo para nunca duplicar
+  // a mesma recomendação sob dois `matchReason` diferentes.
+  const provenLookPool = buildProvenLookPool(source, catalog, crossGroup);
+  const provenLookIds = new Set(provenLookPool.map((rec) => rec.productId));
+  const crossWeightedPool = buildSortedPool(source, catalog, crossGroup, {
+    considerFabric: false,
+  }).filter((rec) => !provenLookIds.has(rec.productId));
+  const crossPool = [...provenLookPool, ...crossWeightedPool];
 
   return composeGroupQuota(samePool, crossPool, {
     quota: GROUP_QUOTA_PER_SIDE,
