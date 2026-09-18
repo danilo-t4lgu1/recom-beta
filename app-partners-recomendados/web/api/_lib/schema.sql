@@ -138,3 +138,66 @@ CREATE TABLE IF NOT EXISTS daily_recompute_log (
   dry_run INTEGER               -- 0/1/NULL (NULL quando nem chegou a essa decisão)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_recompute_log_started_at ON daily_recompute_log(started_at);
+
+-- Sinal novo: pares de produtos REALMENTE comprados juntos (co-compra/market basket),
+-- a partir de pedidos reais da API Nuvemshop (`GET /orders`) — distinto do sinal de
+-- similaridade (cor/tecido/estoque) já existente em catalog_snapshots/variants.
+-- order_ingestion_runs: 1 linha por execução da ingestão de pedidos, mesmo padrão de
+--   ingestion_runs (histórico versionado, nunca fica presa em 'running').
+-- orders: estado normalizado mais recente de CADA pedido lido (upsert por id, igual a
+--   `products` acima) — inclui pedidos cancelados/não pagos, para histórico completo.
+-- order_items: fato append-only (1 linha por produto ÚNICO por pedido por execução que
+--   o gravou) — só recebe linhas de pedidos QUALIFICADOS (não cancelado + pago, ver
+--   ingest-orders.js), para a análise de co-compra nunca contar carrinho abandonado/
+--   cancelado como sinal de "compraram junto". `last_seen_run_id` em `orders` +
+--   `run_id` em `order_items` juntos garantem que uma leitura de análise nunca mistura
+--   itens de um run antigo de um pedido que foi re-ingerido depois (mesma disciplina de
+--   `catalog_snapshots` filtrado por `run_id` vs `variants.last_seen_run_id`).
+CREATE TABLE IF NOT EXISTS order_ingestion_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  orders_read INTEGER,
+  orders_qualified INTEGER,
+  status TEXT NOT NULL DEFAULT 'running' -- running | success | failed
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY,           -- order_id da Nuvemshop
+  status TEXT,                   -- open | closed | cancelled (bruto da API)
+  payment_status TEXT,           -- pending | paid | ... (bruto da API)
+  created_at TEXT,
+  total TEXT,
+  last_seen_run_id INTEGER REFERENCES order_ingestion_runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id TEXT NOT NULL REFERENCES orders(id),
+  product_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  run_id INTEGER NOT NULL REFERENCES order_ingestion_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+
+-- co_purchase_pairs: recompute COMPLETO a cada execução do script dedicado
+-- (scripts/recompute-co-purchase-pairs.js) — nunca incremental (DELETE FROM +
+-- INSERT numa única transação, ver replaceCoPurchasePairs em orders-store.js).
+-- Escopo deliberadamente limitado a pares CROSS-GROUP (Partes de Cima <->
+-- Partes de Baixo) com count >= piso configurável (MIN_CO_PURCHASE_COUNT,
+-- default 3) — sinal de "Sugestão de Look Automática" de prioridade máxima no
+-- motor de recomendação (peso 0, acima de cor/tecido). Convenção obrigatória:
+-- product_id_a < product_id_b (comparação de string), nunca duas linhas para o
+-- mesmo par em ordem invertida — mesma convenção de chave canônica já usada
+-- internamente por computeCoPurchasePairs (co-purchase-analysis.js).
+CREATE TABLE IF NOT EXISTS co_purchase_pairs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id_a TEXT NOT NULL,
+  product_id_b TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  computed_at TEXT NOT NULL,
+  UNIQUE(product_id_a, product_id_b)
+);
+CREATE INDEX IF NOT EXISTS idx_co_purchase_a ON co_purchase_pairs(product_id_a);
+CREATE INDEX IF NOT EXISTS idx_co_purchase_b ON co_purchase_pairs(product_id_b);

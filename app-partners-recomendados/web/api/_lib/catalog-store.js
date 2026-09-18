@@ -145,6 +145,18 @@ const selectVariantsForRun = db.prepare(
    ORDER BY product_id, id`
 );
 
+// Sinal de "Sugestão de Look Automática" (co-compra real, ver schema.sql): query
+// PRÓPRIA contra `co_purchase_pairs` usando a MESMA conexão `db` deste módulo, em
+// vez de importar `orders-store.js` — os dois módulos apontam para o mesmo arquivo
+// `data/catalog.db`, mas abrir uma SEGUNDA conexão aqui deixaria um handle nativo
+// extra aberto que os testes de integração (que só fecham a conexão de
+// catalog-store.js via `closeDbForTests`) não sabem fechar, causando EPERM ao
+// remover o diretório temporário no Windows. Query local evita esse problema.
+const selectAllCoPurchasePairsStmt = db.prepare(
+  `SELECT product_id_a AS product_id_a, product_id_b AS product_id_b, count AS count
+   FROM co_purchase_pairs`
+);
+
 // Fase 4 (D-25, APRV-02/APRV-03): leitura de baseline por run + persistência/leitura
 // da decisão de aprovação em approval_queue.
 const selectBaselineForRunStmt = db.prepare(
@@ -318,6 +330,14 @@ const selectAllIngestionRunsStmt = db.prepare(
  * `null` NUNCA é coagido para `false`, senão o catálogo inteiro sumiria antes da 1ª
  * re-ingestão que popula o flag (Pitfall 2).
  *
+ * `provenLookPartnerIds` (sinal de co-compra real, "Sugestão de Look Automática"):
+ * lido de `co_purchase_pairs` via `getCoPurchasePartnersMap()` (orders-store.js,
+ * mesmo arquivo `data/catalog.db`) — array de `{ productId, count }` dos parceiros
+ * de look CROSS-GROUP comprovados daquele produto. Produto sem nenhum par comprovado
+ * recebe `[]`, nunca `null`/`undefined` (nunca quebra consumidores que iteram o
+ * campo). Sem filtro de elegibilidade aqui (mesma disciplina do resto desta função)
+ * — é o motor (recommendation-engine.js) quem decide o que é elegível.
+ *
  * @returns {Array<{
  *   productId: string,
  *   name: string|null,
@@ -326,6 +346,7 @@ const selectAllIngestionRunsStmt = db.prepare(
  *   productGroupCanonical: string|null,
  *   hasAvailableGrade: boolean,
  *   published: boolean|null,
+ *   provenLookPartnerIds: Array<{ productId: string, count: number }>,
  *   variants: Array<{ variantId: string, sku: string|null, sizeValue: string|null, stockTotal: number }>
  * }>}
  */
@@ -336,6 +357,23 @@ export function getLatestSnapshotProducts() {
   const runId = latestRun.id;
   const snapshotRows = selectSnapshotsForRun.all({ runId });
   const variantRows = selectVariantsForRun.all({ runId });
+
+  // Mapa BIDIRECIONAL de parceiros de look comprovados: se o par A-B existe, tanto
+  // A quanto B recebem uma entrada apontando um pro outro (mesmo formato de
+  // `getCoPurchasePartnersMap` em orders-store.js, reimplementado aqui só para
+  // usar a conexão `db` local deste módulo — ver comentário acima).
+  const coPurchasePartnersMap = new Map();
+  for (const row of selectAllCoPurchasePairsStmt.all()) {
+    const productIdA = String(row.product_id_a);
+    const productIdB = String(row.product_id_b);
+    const count = row.count;
+
+    if (!coPurchasePartnersMap.has(productIdA)) coPurchasePartnersMap.set(productIdA, []);
+    coPurchasePartnersMap.get(productIdA).push({ partnerId: productIdB, count });
+
+    if (!coPurchasePartnersMap.has(productIdB)) coPurchasePartnersMap.set(productIdB, []);
+    coPurchasePartnersMap.get(productIdB).push({ partnerId: productIdA, count });
+  }
 
   // Ordem determinística de selectVariantsForRun (ORDER BY product_id, id) garante
   // que a primeira ocorrência de cada product_id neste loop seja a "primeira
@@ -368,6 +406,10 @@ export function getLatestSnapshotProducts() {
       hasAvailableGrade: row.has_available_grade === 1,
       // Tri-estado D-58/A6: null (pré-migração) preservado, nunca coagido p/ false.
       published: row.published == null ? null : row.published === 1,
+      provenLookPartnerIds: (coPurchasePartnersMap.get(productId) || []).map((partner) => ({
+        productId: partner.partnerId,
+        count: partner.count,
+      })),
       variants: variantsByProduct.get(productId) || [],
     };
   });
