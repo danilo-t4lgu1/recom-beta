@@ -17,13 +17,15 @@
  * pelo Partners Portal), com acesso irrestrito ao DOM — por isso manipulacao
  * direta de `document.*` e esperada e correta aqui (ao contrario do NubeSDK).
  *
- * OBJETIVO (2026-07-20): renderizar o bloco "Recomendados" no MESMO FORMATO do
- * bloco nativo "Produtos Relacionados" do tema Morelia (carrossel Swiper, cards
- * `col-6 col-md-3`), porem alimentado pela saida do nosso motor (ate 8 produtos,
- * dentro dos criterios do projeto), em vez da logica de relacionados do tema.
- * Reusa as classes de CSS do proprio tema (`header-related`, `swiper-*`,
- * `js-item-product`, `js-item-name`) para herdar o estilo nativo, e inicializa
- * uma instancia propria de `window.Swiper` (disponivel globalmente no tema).
+ * OBJETIVO (2026-09-18, Fase 8 Plano 03): renderizar o bloco "Recomendados"
+ * como uma trilha de ROLAGEM NATIVA do navegador (flex + overflow-x + scroll-
+ * snap), sem nenhuma biblioteca de carrossel de terceiro (Swiper removido) e
+ * sem auto-avanco por temporizador — navegacao manual via dois botoes
+ * (anterior/proximo, estilo glassmorphism, copiado da UI de Stories ja ao
+ * vivo no site). O primeiro card exibe a flag "Sugestao de Look" quando (e so
+ * quando) o produto correspondente vem marcado isProvenLook:true pelo backend
+ * (Plano 08-02). Alimentado pela saida do nosso motor (ate 8 produtos, dentro
+ * dos criterios do projeto).
  */
 
 (function () {
@@ -140,9 +142,9 @@
   //
   // Reusa as classes do tema Morelia (capturadas ao vivo em 2026-07-20):
   //   header:  .header-related > h2.section-title.section-title-products-home
-  //   card:    .swiper-slide.js-item-product.item-product + .js-item-name.item-name
+  //   card:    .js-item-name.item-name (nome), trilha propria .rec-track (2026-09-18)
   // Mantem o bloco nativo oculto (ele mostra os relacionados do tema, nao os
-  // nossos) e insere ESTE bloco na posicao D-03, com Swiper proprio.
+  // nossos) e insere ESTE bloco na posicao D-03, com rolagem nativa propria.
   // Preço: exibe o preço ATUAL (promocional, quando houver) — igual à página do
   // produto — com o preço cheio riscado + flag de % quando em promoção (D-52).
   // Estilos do bloco injetados UMA vez (classes + media queries). Preferido a
@@ -166,6 +168,24 @@
       B + '.rec-chip{display:inline-block;min-width:26px;text-align:center;padding:2px 5px;border:1px solid rgba(190,190,190,.4);border-radius:6px;font-size:13px;line-height:1.4;color:#222;background:rgba(255,255,255,.4);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}' +
       // Indisponivel: risco diagonal PRETO + 20% mais transparente (opacity .8).
       B + '.rec-chip.off{color:#888;opacity:.8;background-image:linear-gradient(to top right,transparent calc(50% - .8px),#1a1a1a calc(50% - .8px),#1a1a1a calc(50% + .8px),transparent calc(50% + .8px));}' +
+      // Trilha de rolagem nativa (substitui o Swiper): flex + overflow-x +
+      // scroll-snap, sem lib de terceiro nem auto-avanco por temporizador.
+      B + '.rec-viewport{position:relative;}' +
+      B + '.rec-track{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;}' +
+      B + '.rec-track::-webkit-scrollbar{display:none;}' +
+      B + '.rec-card{scroll-snap-align:start;flex:0 0 58%;max-width:58%;}' +
+      // Botoes de navegacao (glassmorphism, copiados da UI de Stories ja ao
+      // vivo no site) — circulares, sobrepostos as bordas da trilha.
+      B + '.rec-nav{border:1px solid rgba(255,255,255,.16);position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;min-width:44px;min-height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(20,20,20,.55);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.2);cursor:pointer;}' +
+      B + '.rec-nav-prev{left:-4px;}' +
+      B + '.rec-nav-next{right:-4px;}' +
+      '@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)){' +
+      B + '.rec-nav{-webkit-backdrop-filter:blur(16px) saturate(130%);backdrop-filter:blur(16px) saturate(130%);}' +
+      '}' +
+      // Container de flags sobre a imagem do card (preparado para empilhar
+      // multiplas flags no futuro; este plano so insere o selo de Look).
+      B + '.rec-flags{position:absolute;top:10px;left:10px;z-index:2;display:flex;flex-direction:column;gap:6px;}' +
+      B + '.rec-look-badge{font-family:Poppins,sans-serif;font-size:11px;font-weight:600;color:#fff;background:#000;padding:4px 8px;border-radius:2px;text-transform:uppercase;letter-spacing:.22px;}' +
       // DESKTOP (>=768): bloco ~20% menor (nome/preco/chip), mas FLAG +30%.
       '@media (min-width:768px){' +
       B + '.rec-name{font-size:.92rem;}' +
@@ -173,6 +193,8 @@
       B + '.rec-old{font-size:.98rem;}' + // +30% no desktop (preco cheio riscado)
       B + '.rec-flag{font-size:1.14rem;padding:3px 9px;}' +
       B + '.rec-chip{min-width:21px;font-size:10.5px;padding:2px 4px;}' +
+      B + '.rec-card{flex:0 0 23.5%;max-width:23.5%;}' +
+      B + '.rec-track{gap:16px;}' +
       '}' +
       // MOBILE (<=767): grade de tamanho ~10% menor p/ caber XPP/34 numa linha.
       '@media (max-width:767px){' +
@@ -219,6 +241,17 @@
     return '<div class="item-sizes rec-sizes">' + chips + '</div>';
   }
 
+  // -------------------------------------------------------------------------
+  // Flag "Sugestao de Look": SOMENTE no primeiro card (index 0) e SOMENTE
+  // quando o backend marca o produto como isProvenLook:true (Plano 08-02).
+  // Funcao pura, nunca lanca — testada em main.test.js.
+  // -------------------------------------------------------------------------
+  function shouldShowLookFlag(product, index) {
+    if (index !== 0) return false;
+    if (!product) return false;
+    return product.isProvenLook === true;
+  }
+
   function buildSlideHtml(product, index) {
     var safeUrl = escapeHtml(product.url);
     var safeName = escapeHtml(product.name);
@@ -235,10 +268,17 @@
       ? '<img class="rec-img" src="' + safeImage + '" alt="' + safeName + '"' + loadingAttr + '>'
       : '';
 
+    // O texto do selo e os SVGs de navegacao (buildBlockHtml) sao literais
+    // estaticos do proprio script, nunca interpolados a partir de `product`
+    // (T-08-03-01) — so isProvenLook (boolean) decide a exibicao.
+    var lookFlagHtml = shouldShowLookFlag(product, index)
+      ? '<div class="rec-flags"><span class="rec-look-badge">Sugestão de Look</span></div>'
+      : '';
+
     return (
-      '<div class="swiper-slide js-item-product item-product col-grid" style="height:auto;">' +
+      '<div class="rec-card">' +
       '<a href="' + safeUrl + '" class="item-link" style="display:block;text-decoration:none;color:inherit;">' +
-      '<div class="item-image" style="margin-bottom:8px;">' + imageHtml + '</div>' +
+      '<div class="item-image" style="margin-bottom:8px;position:relative;">' + lookFlagHtml + imageHtml + '</div>' +
       '<div class="js-item-name item-name rec-name">' + safeName + '</div>' +
       buildPriceHtml(product) +
       buildSizesHtml(product.sizes) +
@@ -261,43 +301,49 @@
       '<h2 class="section-title section-title-products-home" style="margin:0 0 6px;">RECOMENDADOS</h2>' +
       '<a class="link-text" href="/produtos" style="display:inline-block;">Compre Agora</a>' +
       '</div>' +
-      '<div class="swiper js-recomendados-swiper products-section section-products-related position-relative" style="overflow:hidden;">' +
-      '<div class="swiper-wrapper">' + slides + '</div>' +
-      '<div class="swiper-pagination js-recomendados-pagination" style="position:relative;margin-top:12px;"></div>' +
+      '<div class="rec-viewport">' +
+      '<div class="rec-track">' + slides + '</div>' +
+      '<button type="button" class="rec-nav rec-nav-prev" aria-label="Ver recomendação anterior">' +
+      '<svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M10 2L4 8l6 6"></path></svg>' +
+      '</button>' +
+      '<button type="button" class="rec-nav rec-nav-next" aria-label="Ver próxima recomendação">' +
+      '<svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><path d="M6 2l6 6-6 6"></path></svg>' +
+      '</button>' +
       '</div>' +
       '</div>'
     );
   }
 
-  function initSwiper(slideCount) {
-    if (typeof window.Swiper === 'undefined') {
-      // Sem Swiper (tema mudou/nao carregou): o bloco ainda aparece como grid
-      // rolavel horizontalmente; nao e erro fatal.
-      return;
-    }
-    // Só faz sentido loop/autoplay quando há mais slides do que cabem na tela.
-    var perView = (window.innerWidth || 1024) >= 768 ? 4 : 2;
-    var enableLoop = slideCount > perView;
+  // Navegacao do carrossel: rolagem nativa via scrollBy, sem lib de terceiro
+  // e sem auto-avanco por temporizador (substitui integralmente o antigo
+  // initSwiper). Uma falha aqui nunca impede a renderizacao dos cards
+  // (T-08-03-03) — trilha e cards continuam roláveis via CSS nativo mesmo
+  // sem os botoes funcionando.
+  function initCarouselNav(blockEl) {
     try {
-      var sw = new window.Swiper('.js-recomendados-swiper', {
-        slidesPerView: 1.7, // ~20% mais largo que 2 (+ um "peek" que sinaliza swipe)
-        spaceBetween: 14,
-        watchOverflow: true,
-        grabCursor: true, // arrastar no desktop (segurar o clique) + toque no mobile
-        loop: enableLoop,
-        breakpoints: { 768: { slidesPerView: 4, spaceBetween: 16 } }, // desktop 20% menor (mais cards por linha)
-        pagination: { el: '.js-recomendados-pagination', clickable: true },
-      });
-      // Autoplay de 3s por interval próprio (não depende do módulo Autoplay do
-      // build de Swiper do tema). disableOnInteraction implícito: se o usuário
-      // arrastar, o próximo tick só avança a partir da posição atual.
-      if (enableLoop) {
-        setInterval(function () {
-          try { sw.slideNext(400); } catch (e) { /* nunca derruba o bloco */ }
-        }, 3000);
+      if (!blockEl) return;
+      var track = blockEl.querySelector('.rec-track');
+      if (!track) return;
+      var prevBtn = blockEl.querySelector('.rec-nav-prev');
+      var nextBtn = blockEl.querySelector('.rec-nav-next');
+      var GAP_PX = 14;
+      var firstCard = track.querySelector('.rec-card');
+      var distance = firstCard
+        ? firstCard.getBoundingClientRect().width + GAP_PX
+        : track.clientWidth;
+
+      if (prevBtn) {
+        prevBtn.addEventListener('click', function () {
+          track.scrollBy({ left: -distance, behavior: 'smooth' });
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', function () {
+          track.scrollBy({ left: distance, behavior: 'smooth' });
+        });
       }
     } catch (e) {
-      /* init do carrossel nunca derruba o bloco */
+      /* falha na navegacao nunca impede a renderizacao dos cards */
     }
   }
 
@@ -318,7 +364,7 @@
       return false;
     }
 
-    initSwiper(products.length);
+    initCarouselNav(document.getElementById(BLOCK_ID));
     return true;
   }
 
@@ -363,6 +409,7 @@
       setCachedRecommendation: setCachedRecommendation,
       extractProducts: extractProducts,
       formatPrice: formatPrice,
+      shouldShowLookFlag: shouldShowLookFlag,
     };
     return;
   }
