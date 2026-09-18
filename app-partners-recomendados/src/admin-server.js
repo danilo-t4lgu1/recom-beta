@@ -14,9 +14,16 @@ import {
   listIngestionRuns,
   listWriteLog,
   listDailyRecomputeLog,
+  getAllCoPurchasePairs,
 } from './db/catalog-store.js';
 import { buildAdminDashboard, buildFabricTagDetail, buildCronLog } from './api/admin-dashboard.js';
 import { buildFabricTagWorkbook, buildCronLogWorkbook } from './api/admin-export.js';
+import {
+  searchCatalogProducts,
+  inspectProductRecommendations,
+  getCoPurchasePairsReport,
+  getCatalogHealth,
+} from './api/admin-intelligence.js';
 
 const PORT = process.env.ADMIN_PORT || 3200;
 const ADMIN_PANEL_ORIGIN = process.env.ADMIN_PANEL_ORIGIN || 'http://localhost:5174';
@@ -24,6 +31,10 @@ const ADMIN_PANEL_ORIGIN = process.env.ADMIN_PANEL_ORIGIN || 'http://localhost:5
 const DASHBOARD_PATH = /^\/api\/dashboard\/?$/;
 const FABRIC_TAGS_PATH = /^\/api\/fabric-tags\/?$/;
 const CRON_LOG_PATH = /^\/api\/cron-log\/?$/;
+const PRODUCTS_SEARCH_PATH = /^\/api\/products-search\/?$/;
+const RECOMMENDATIONS_INSPECT_PATH = /^\/api\/recommendations-inspect\/?$/;
+const CO_PURCHASE_PAIRS_PATH = /^\/api\/co-purchase-pairs\/?$/;
+const CATALOG_HEALTH_PATH = /^\/api\/catalog-health\/?$/;
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -113,6 +124,83 @@ export function createServer() {
         }
       } catch (err) {
         sendJson(res, 500, { error: 'Internal error building cron log' });
+      }
+      return;
+    }
+
+    if (PRODUCTS_SEARCH_PATH.test(url.pathname)) {
+      try {
+        const query = url.searchParams.get('q') || '';
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? Number.parseInt(limitParam, 10) : 20;
+        const products = searchCatalogProducts({
+          snapshotProducts: getLatestSnapshotProducts(),
+          query,
+          limit,
+        });
+        sendJson(res, 200, { products, count: products.length });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error searching catalog products' });
+      }
+      return;
+    }
+
+    if (RECOMMENDATIONS_INSPECT_PATH.test(url.pathname)) {
+      const productId = url.searchParams.get('productId');
+      if (!productId) {
+        sendJson(res, 400, { error: 'Missing required query parameter: productId' });
+        return;
+      }
+      try {
+        const result = inspectProductRecommendations({
+          productId,
+          snapshotProducts: getLatestSnapshotProducts(),
+          maxRecommendations: 8,
+        });
+        if (result.notFound) {
+          sendJson(res, 404, { error: `Product not found: ${productId}`, notFound: true });
+          return;
+        }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error inspecting recommendations' });
+      }
+      return;
+    }
+
+    if (CO_PURCHASE_PAIRS_PATH.test(url.pathname)) {
+      try {
+        const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+        const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 25));
+        const category = url.searchParams.get('category') || null;
+        const onlyInStock = url.searchParams.get('onlyInStock') === 'true' || url.searchParams.get('onlyInStock') === '1';
+        const sortBy = url.searchParams.get('sortBy') === 'count_asc' ? 'count_asc' : 'count';
+        const result = getCoPurchasePairsReport({
+          coPurchasePairs: getAllCoPurchasePairs(),
+          snapshotProducts: getLatestSnapshotProducts(),
+          page,
+          limit,
+          category,
+          onlyInStock,
+          sortBy,
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error fetching co-purchase pairs' });
+      }
+      return;
+    }
+
+    if (CATALOG_HEALTH_PATH.test(url.pathname)) {
+      try {
+        const result = getCatalogHealth({
+          snapshotProducts: getLatestSnapshotProducts(),
+          writeLogRows: listWriteLog(),
+          dailyRecomputeLogRows: listDailyRecomputeLog(),
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: 'Internal error fetching catalog health' });
       }
       return;
     }

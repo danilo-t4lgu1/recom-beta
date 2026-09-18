@@ -47,6 +47,7 @@ export default async function handler(req, res) {
     }
     res.status(200).json({ rows });
   } catch (err) {
+    console.error('[api/cron-log] Error building cron log:', err);
     res.status(500).json({ error: 'Internal error building cron log' });
   }
 }

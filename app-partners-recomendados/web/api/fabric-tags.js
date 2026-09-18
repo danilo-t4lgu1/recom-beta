@@ -43,6 +43,7 @@ export default async function handler(req, res) {
     }
     res.status(200).json(detail);
   } catch (err) {
+    console.error('[api/fabric-tags] Error building fabric tag detail:', err);
     res.status(500).json({ error: 'Internal error building fabric tag detail' });
   }
 }

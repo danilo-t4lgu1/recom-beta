@@ -29,7 +29,7 @@ Este roadmap consolida o ciclo de desenvolvimento do sistema de recomendações 
 - **Goal:** Redesenho completo do carrossel no storefront (substituição do Swiper por flexbox horizontal nativo + scroll-snap), eliminação do auto-avanço de 3s, adição de controles de navegação circulares glassmorphism e exibição do selo preto "Sugestão de Look" exclusivamente para itens com `isProvenLook: true`.
 - **Status:** Complete (3/3 planos verificados e script publicado no Nuvemshop Partners).
 
-### Phase 11: Painel de Exibição e Gestão do App Recom (Planejada — Pronta para Execução)
+### Phase 11: Painel de Exibição e Gestão do App Recom (Concluída)
 - **Goal:** Desenvolver e expandir a interface do Painel Administrativo do App Recom (`web/`), proporcionando uma visão gerencial e operacional completa:
   1. **Hub de Inteligência de Looks:** Visualização dos 1.373 pares de co-compra reais (`co_purchase_pairs`), ordenados por força de associação e volume de pedidos.
   2. **Explorador Visual de Recomendações por Produto:** Mecanismo de busca e inspeção individual (digitar nome ou ID de qualquer produto e visualizar na hora a vitrine exata que o motor gera para ele, com motivos de match e pesos 0/1/2).
@@ -39,11 +39,12 @@ Este roadmap consolida o ciclo de desenvolvimento do sistema de recomendações 
 - **Subsystem:** `app-partners-recomendados/web`
 - **Depends on:** Phase 8
 - **Plans:**
-  - [ ] **11.1: Backend Domain Models & Query Selectors** (Wave 1) — Funções puras em `src/api/admin-intelligence.js`, testes Vitest e atualização de `prepare-admin-api.mjs`.
-  - [ ] **11.2: Vercel Serverless Endpoints & API Client** (Wave 2) — Rotas serverless em `web/api/*.js` e cliente frontend `web/src/api/client.js`.
-  - [ ] **11.3: Design System, Tokens, Icons & Shell Navigation** (Wave 3) — Design system em `index.css`, ícones vetoriais SVG e shell de abas navegável no `App.jsx`.
-  - [ ] **11.4: Inspetor Visual de Vitrines & Scaffolding de Vínculo Manual** (Wave 4) — `InspectorTab.jsx` com autocomplete e vitrine simulada + `ManualCurationTab.jsx` com slots reativos de curadoria.
-  - [ ] **11.5: Hub de Looks Comprovados & Painel de Saúde do Catálogo** (Wave 5) — `LooksHubTab.jsx` com 1.373 pares paginados/filtráveis + `CatalogHealthTab.jsx` com as 11 categorias e disjuntor.
-  - [ ] **11.6: Verificação Empírica, Screenshots no Browser & Documentação** (Wave 6) — Testes automatizados, build, lint, screenshots em alta resolução no browser e relatório `VERIFICATION.md`.
-- **Status:** Planned (6/6 plans defined)
+  - [x] **11.1: Backend Domain Models & Query Selectors** (Wave 1) — Funções puras em `src/api/admin-intelligence.js`, testes Vitest e atualização de `prepare-admin-api.mjs`.
+  - [x] **11.2: Vercel Serverless Endpoints & API Client** (Wave 2) — Rotas serverless em `web/api/*.js` e cliente frontend `web/src/api/client.js`.
+  - [x] **11.3: Design System, Tokens, Icons & Shell Navigation** (Wave 3) — Design system em `index.css`, ícones vetoriais SVG e shell de abas navegável no `App.jsx`.
+  - [x] **11.4: Inspetor Visual de Vitrines & Scaffolding de Vínculo Manual** (Wave 4) — `InspectorTab.jsx` com autocomplete e vitrine simulada + `ManualCurationTab.jsx` com slots reativos de curadoria.
+  - [x] **11.5: Hub de Looks Comprovados & Painel de Saúde do Catálogo** (Wave 5) — `LooksHubTab.jsx` com 1.373 pares paginados/filtráveis + `CatalogHealthTab.jsx` com as 11 categorias e disjuntor.
+  - [x] **11.6: Verificação Empírica, Screenshots no Browser & Documentação** (Wave 6) — Testes automatizados, build, lint, screenshots em alta resolução no browser e relatório `VERIFICATION.md`.
+- **Status:** ✅ Complete (6/6 plans verified)
+
 

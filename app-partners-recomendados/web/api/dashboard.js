@@ -45,6 +45,7 @@ export default async function handler(req, res) {
     });
     res.status(200).json(dashboard);
   } catch (err) {
+    console.error('[api/dashboard] Error building dashboard:', err);
     res.status(500).json({ error: 'Internal error building dashboard' });
   }
 }
