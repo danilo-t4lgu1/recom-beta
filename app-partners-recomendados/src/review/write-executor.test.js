@@ -83,7 +83,10 @@ describe('executeApprovedWrite', () => {
 
     const result = await executeApprovedWrite({ productId: '1', decision, dryRun: false, runId: 7 });
 
-    expect(createMetafield).toHaveBeenCalledWith({ ownerId: '1', value: JSON.stringify(['2']) });
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: '1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
+    });
     expect(updateMetafield).not.toHaveBeenCalled();
     expect(insertWriteLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -91,7 +94,7 @@ describe('executeApprovedWrite', () => {
         runId: 7,
         metafieldId: 'mf-new',
         previousValue: null,
-        writtenValue: JSON.stringify(['2']),
+        writtenValue: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
         triggeredBy: 'manual',
         status: 'success',
         errorMessage: null,
@@ -107,7 +110,10 @@ describe('executeApprovedWrite', () => {
 
     const result = await executeApprovedWrite({ productId: '1', decision, dryRun: false, runId: 7 });
 
-    expect(updateMetafield).toHaveBeenCalledWith({ id: 'mf-1', value: JSON.stringify(['2']) });
+    expect(updateMetafield).toHaveBeenCalledWith({
+      id: 'mf-1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
+    });
     expect(createMetafield).not.toHaveBeenCalled();
     expect(insertWriteLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -115,7 +121,7 @@ describe('executeApprovedWrite', () => {
         runId: 7,
         metafieldId: 'mf-1',
         previousValue: '["9"]',
-        writtenValue: JSON.stringify(['2']),
+        writtenValue: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
         status: 'success',
       })
     );
@@ -227,6 +233,29 @@ describe('filterReferentiallyValid (Defesa 2, D-67)', () => {
     const source = entry({ productId: '1' });
     expect(() => filterReferentiallyValid(source, ['999'], new Map())).not.toThrow();
   });
+
+  it('mantém um par de Look comprovado mesmo com cor diferente da fonte', () => {
+    const source = entry({
+      productId: '1',
+      colorValue: 'Marrom',
+      provenLookPartnerIds: [{ productId: '2', count: 232 }],
+    });
+    const snapshotById = new Map([['2', entry({ productId: '2', colorValue: 'Preto' })]]);
+    expect(filterReferentiallyValid(source, ['2'], snapshotById)).toEqual(['2']);
+  });
+
+  it('mesmo Look comprovado ainda é descartado sem estoque ou despublicado', () => {
+    const source = entry({
+      productId: '1',
+      colorValue: 'Marrom',
+      provenLookPartnerIds: [{ productId: '2', count: 232 }, { productId: '3', count: 10 }],
+    });
+    const snapshotById = new Map([
+      ['2', entry({ productId: '2', colorValue: 'Preto', hasAvailableGrade: false })],
+      ['3', entry({ productId: '3', colorValue: 'Preto', published: false })],
+    ]);
+    expect(filterReferentiallyValid(source, ['2', '3'], snapshotById)).toEqual([]);
+  });
 });
 
 // Caminho `scheduled` (D-61): grava automaticamente SEM o gate de aprovação
@@ -272,14 +301,17 @@ describe('executeScheduledWrite (caminho scheduled, D-61/D-67)', () => {
       snapshotById: snapshotWith(['2']),
     });
 
-    expect(createMetafield).toHaveBeenCalledWith({ ownerId: '1', value: JSON.stringify(['2']) });
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: '1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
+    });
     expect(insertWriteLog).toHaveBeenCalledWith(
       expect.objectContaining({
         productId: '1',
         runId: 42,
         metafieldId: 'mf-new',
         previousValue: null,
-        writtenValue: JSON.stringify(['2']),
+        writtenValue: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
         triggeredBy: 'scheduled',
         status: 'success',
       })
@@ -367,6 +399,74 @@ describe('executeScheduledWrite (caminho scheduled, D-61/D-67)', () => {
     expect(notifyWriteFailure).toHaveBeenCalledWith(
       expect.objectContaining({ triggeredBy: 'scheduled' })
     );
+  });
+
+  it('SC6: provenLookIds candidato que sobrevive à Defesa 2 é persistido no valor gravado', async () => {
+    vi.mocked(findMetafield).mockResolvedValue(null);
+    vi.mocked(createMetafield).mockResolvedValue({ id: 'mf-new' });
+
+    const result = await executeScheduledWrite({
+      productId: '1',
+      recommendedIds: ['2'],
+      provenLookIds: ['2'],
+      dryRun: false,
+      runId: 42,
+      sourceEntry: source(),
+      snapshotById: snapshotWith(['2']),
+    });
+
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: '1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: ['2'] }),
+    });
+    expect(result).toEqual({ productId: '1', approvedIds: ['2'], dryRun: false, written: true });
+  });
+
+  it('SC7: provenLookIds descartado pela Defesa 2 nunca chega ao valor persistido', async () => {
+    vi.mocked(findMetafield).mockResolvedValue(null);
+    vi.mocked(createMetafield).mockResolvedValue({ id: 'mf-new' });
+
+    const snapshotById = snapshotWith(['2']);
+    snapshotById.set('3', {
+      productId: '3',
+      colorValue: 'Azul',
+      hasAvailableGrade: true,
+      published: false, // Defesa 2 descarta '3' (não publicado)
+    });
+
+    await executeScheduledWrite({
+      productId: '1',
+      recommendedIds: ['2', '3'],
+      provenLookIds: ['2', '3'],
+      dryRun: false,
+      runId: 42,
+      sourceEntry: source(),
+      snapshotById,
+    });
+
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: '1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: ['2'] }),
+    });
+  });
+
+  it('SC8: sem provenLookIds informado (parâmetro ausente), valor persistido tem provenLookIds:[]', async () => {
+    vi.mocked(findMetafield).mockResolvedValue(null);
+    vi.mocked(createMetafield).mockResolvedValue({ id: 'mf-new' });
+
+    await executeScheduledWrite({
+      productId: '1',
+      recommendedIds: ['2'],
+      dryRun: false,
+      runId: 42,
+      sourceEntry: source(),
+      snapshotById: snapshotWith(['2']),
+    });
+
+    expect(createMetafield).toHaveBeenCalledWith({
+      ownerId: '1',
+      value: JSON.stringify({ ids: ['2'], provenLookIds: [] }),
+    });
   });
 });
 

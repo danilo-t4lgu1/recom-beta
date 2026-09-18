@@ -35,6 +35,10 @@ import { notifyWriteFailure } from './notify-failure.js';
  * (se não existir), registra exatamente uma linha em `write_log` (sucesso ou
  * falha, WRTE-04) e, em caso de falha, dispara `notifyWriteFailure` sem nunca
  * mascarar o erro original propagado ao chamador (Pitfall 5/WRTE-05).
+ *
+ * O caminho manual NUNCA rastreia `matchReason` retroativamente — sempre grava
+ * `provenLookIds: []` (decisão de negócio: ids aprovados manualmente vêm de
+ * uma decisão humana armazenada, sem nenhum conceito de matchReason associado).
  * @param {{ productId: string, decision: object|null, dryRun?: boolean, runId?: number|null }} params
  * @returns {Promise<{ productId: string, approvedIds: string[], dryRun: boolean, written: boolean, reason?: string }>}
  */
@@ -45,7 +49,13 @@ export async function executeApprovedWrite({ productId, decision, dryRun, runId 
     return { productId, approvedIds, dryRun: true, written: false, reason: 'dry run' };
   }
 
-  await writeRecommendationMetafield({ productId, approvedIds, triggeredBy: 'manual', runId });
+  await writeRecommendationMetafield({
+    productId,
+    approvedIds,
+    provenLookIds: [],
+    triggeredBy: 'manual',
+    runId,
+  });
 
   return { productId, approvedIds, dryRun: false, written: true };
 }
@@ -70,18 +80,35 @@ function normalizeColor(value) {
  * D-58/A6), tem grade de estoque disponível (`hasAvailableGrade`) e cuja cor
  * normalizada bate com a cor normalizada da fonte. Função pura, sem I/O, nunca
  * lança para entradas ausentes. Preserva a ordem dos ids de entrada.
- * @param {{ colorValue: string|null }} sourceEntry - CatalogProductEntry da fonte
+ *
+ * Exceção à exigência de cor (achado 2026-09-17): um candidato listado em
+ * `sourceEntry.provenLookPartnerIds` (par de "Look Automático" comprovado por
+ * co-compra real, ver `recommendation-engine.js`/`buildProvenLookPool`) nunca
+ * é descartado por cor diferente — o motor já decidiu deliberadamente que essa
+ * exigência não se aplica a esse caso (é sinal de compra real, não inferência
+ * por atributo), e sem esta exceção a Defesa 2 apagava silenciosamente todo
+ * par de peso 0 antes de chegar à loja, mesmo com estoque/visibilidade OK.
+ * Estoque e visibilidade continuam obrigatórios mesmo para esses ids.
+ * @param {{ colorValue: string|null, provenLookPartnerIds?: Array<{productId: string, count: number}> }} sourceEntry - CatalogProductEntry da fonte
  * @param {string[]} recommendedIds - ids candidatos calculados pelo motor
  * @param {Map<string, { published?: boolean|null, hasAvailableGrade?: boolean, colorValue?: string|null }>} snapshotById
  * @returns {string[]} subconjunto referencialmente válido dos `recommendedIds`
  */
 export function filterReferentiallyValid(sourceEntry, recommendedIds, snapshotById) {
   const sourceColor = normalizeColor(sourceEntry ? sourceEntry.colorValue : null);
+  const provenLookIds = new Set(
+    (sourceEntry && Array.isArray(sourceEntry.provenLookPartnerIds)
+      ? sourceEntry.provenLookPartnerIds
+      : []
+    ).map((p) => String(p.productId))
+  );
+
   return recommendedIds.filter((id) => {
     const candidate = snapshotById.get(String(id));
     if (!candidate) return false; // não existe no snapshot atual
     if (candidate.published === false) return false; // oculto (D-58/D-67)
     if (!candidate.hasAvailableGrade) return false; // sem estoque
+    if (provenLookIds.has(String(id))) return true; // Look comprovado: cor não se aplica
     return normalizeColor(candidate.colorValue) === sourceColor; // mesma cor
   });
 }
@@ -99,12 +126,20 @@ export function filterReferentiallyValid(sourceEntry, recommendedIds, snapshotBy
  * de cobertura (`written: false`, `reason: 'coverage-gap'`) sem gravar lixo.
  * `dryRun:true` retorna cedo com ZERO I/O (base do kill switch D-62, mesmo
  * padrão de `executeApprovedWrite`).
- * @param {{ productId: string, recommendedIds: string[], dryRun?: boolean, runId?: number|null, sourceEntry: object, snapshotById: Map<string, object> }} params
+ *
+ * `provenLookIds` é a lista CANDIDATA de "Sugestão de Look Automática"
+ * (`matchReason: 'proven_look'`) calculada pelo chamador (`run-daily-job.js`),
+ * ainda não filtrada pela Defesa 2. O valor efetivamente persistido é sempre a
+ * interseção entre esse candidato e `approvedIds` (pós-Defesa-2) — um id de
+ * Look comprovado nunca é gravado se já foi descartado por falta de
+ * estoque/visibilidade/inexistência no snapshot atual.
+ * @param {{ productId: string, recommendedIds: string[], provenLookIds?: string[], dryRun?: boolean, runId?: number|null, sourceEntry: object, snapshotById: Map<string, object> }} params
  * @returns {Promise<{ productId: string, approvedIds: string[], dryRun?: boolean, written: boolean, reason?: string }>}
  */
 export async function executeScheduledWrite({
   productId,
   recommendedIds,
+  provenLookIds = [],
   dryRun,
   runId,
   sourceEntry,
@@ -123,7 +158,20 @@ export async function executeScheduledWrite({
     return { productId, approvedIds, dryRun: true, written: false, reason: 'dry run' };
   }
 
-  await writeRecommendationMetafield({ productId, approvedIds, triggeredBy: 'scheduled', runId });
+  // Interseção com approvedIds pós-Defesa-2: um id de Look nunca é persistido
+  // se a própria Defesa 2 já o descartou (T-08-01-02).
+  const approvedIdSet = new Set(approvedIds.map((id) => String(id)));
+  const writtenProvenLookIds = (Array.isArray(provenLookIds) ? provenLookIds : [])
+    .map((id) => String(id))
+    .filter((id) => approvedIdSet.has(id));
+
+  await writeRecommendationMetafield({
+    productId,
+    approvedIds,
+    provenLookIds: writtenProvenLookIds,
+    triggeredBy: 'scheduled',
+    runId,
+  });
 
   return { productId, approvedIds, dryRun: false, written: true };
 }
@@ -137,11 +185,24 @@ export async function executeScheduledWrite({
  * (Pitfall 5/WRTE-05). `triggeredBy` é parametrizado ('manual' | 'scheduled') e
  * fluído para o `write_log` e para a notificação de falha — este helper NUNCA
  * decide sozinho o gatilho.
- * @param {{ productId: string, approvedIds: string[], triggeredBy: 'manual'|'scheduled', runId?: number|null }} params
+ *
+ * O valor persistido no Metafield é um OBJETO `{ ids, provenLookIds }` (não mais
+ * um array JSON puro): `ids` é sempre `approvedIds` (mesmo conteúdo/ordem de
+ * sempre); `provenLookIds` marca quais desses ids (se algum) são "Sugestão de
+ * Look Automática" (`matchReason: 'proven_look'`) — sempre `[]` no caminho
+ * manual, e no caminho scheduled já vem pré-interseccionado com `approvedIds`
+ * pelo chamador (`executeScheduledWrite`).
+ * @param {{ productId: string, approvedIds: string[], provenLookIds?: string[], triggeredBy: 'manual'|'scheduled', runId?: number|null }} params
  * @returns {Promise<void>}
  */
-async function writeRecommendationMetafield({ productId, approvedIds, triggeredBy, runId }) {
-  const newValue = JSON.stringify(approvedIds);
+async function writeRecommendationMetafield({
+  productId,
+  approvedIds,
+  provenLookIds = [],
+  triggeredBy,
+  runId,
+}) {
+  const newValue = JSON.stringify({ ids: approvedIds, provenLookIds });
 
   try {
     const existing = await findMetafield({ ownerId: productId });
