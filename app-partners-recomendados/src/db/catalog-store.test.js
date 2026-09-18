@@ -840,6 +840,30 @@ describe('baseline de conjunto (disjuntor) + resumo do último run (Fase 07, D-6
     expect(map.get('disj-a')).toEqual(['3', '4', '5']);
   });
 
+  it('written_value no formato objeto {ids, provenLookIds} (toda escrita desde 08-01) devolve ids, não [] (bug corrigido 2026-09-18)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId = seedProduct(store, 'disj-look');
+
+    store.insertWriteLog({
+      productId: 'disj-look',
+      runId,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: JSON.stringify({ ids: ['21', '22', '23'], provenLookIds: ['21'] }),
+      triggeredBy: 'scheduled',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-09-18T10:00:00Z',
+    });
+
+    const map = store.getLastWrittenValuesForAllProducts();
+    // Antes da correção, `Array.isArray(parsed)` era false pra um objeto e o
+    // baseline virava [] — todo produto reescrito no formato novo aparecia como
+    // "sem baseline" pro disjuntor (churn falso de ~100%, confirmado ao vivo
+    // contra os 790 ids do run_id 67 em produção).
+    expect(map.get('disj-look')).toEqual(['21', '22', '23']);
+  });
+
   it('uma linha failed mais recente NÃO substitui o valor success no Map (Test 27, D-63)', async () => {
     const store = await import('./catalog-store.js');
     const runId = seedProduct(store, 'disj-b');
