@@ -88,13 +88,17 @@ function variantStock(v) {
 /**
  * Materializa os dados de exibição de um produto recomendado a partir da API
  * pública — agora com PREÇO ATUAL (promocional quando houver, para bater com a
- * página real do produto), preço cheio para riscar, flag de promoção, e a GRADE
- * DE TAMANHOS com disponibilidade por tamanho. Nunca lança: produto excluído/
- * indisponível vira `null` e é filtrado pelo chamador.
+ * página real do produto), preço cheio para riscar, flag de promoção, a GRADE
+ * DE TAMANHOS com disponibilidade por tamanho, e `isProvenLook` (Plano 08-02)
+ * sinalizando "Sugestão de Look Automática" (co-compra real). Nunca lança:
+ * produto excluído/indisponível vira `null` e é filtrado pelo chamador.
  * @param {string} id
+ * @param {Set<string>} [provenLookIdSet] - ids marcados como Look comprovado
+ *   (pós-Defesa-2, Plano 08-01). Ausente/inválido é tratado defensivamente
+ *   como "nenhum id comprovado" — nunca lança.
  * @returns {Promise<object|null>}
  */
-async function materializeProduct(id) {
+async function materializeProduct(id, provenLookIdSet) {
   try {
     const product = await getProduct(id);
     const variants = Array.isArray(product.variants) ? product.variants : [];
@@ -129,6 +133,7 @@ async function materializeProduct(id) {
       onSale,
       discountPercent: onSale ? Math.round((1 - promo / regular) * 100) : null,
       sizes,
+      isProvenLook: provenLookIdSet instanceof Set ? provenLookIdSet.has(String(id)) : false,
     };
   } catch {
     return null;
@@ -148,7 +153,7 @@ async function materializeProduct(id) {
  * @returns {Promise<{
  *   productId: string|number,
  *   recommendedProductIds: string[],
- *   recommendedProducts: Array<{ id: string, url: string, name: string, image: string|null, price: string|null }>,
+ *   recommendedProducts: Array<{ id: string, url: string, name: string, image: string|null, price: string|null, isProvenLook: boolean }>,
  *   recommendedProductId: string|null,
  *   recommendedProduct: { url: string, name: string, image: string|null, price: string|null } | null
  * }>}
@@ -159,11 +164,13 @@ export async function getRecommendations(productId) {
   const match = Array.isArray(metafields)
     ? metafields.find((m) => m.namespace === NAMESPACE && m.key === KEY)
     : null;
+  const rawValue = match ? match.value : null;
 
-  const ids = parseRecommendedIds(match ? match.value : null).slice(0, MAX_RECOMMENDATIONS);
+  const ids = parseRecommendedIds(rawValue).slice(0, MAX_RECOMMENDATIONS);
+  const provenLookIdSet = new Set(parseProvenLookIds(rawValue));
 
   // Materializa em paralelo; ids mortos (produto excluído) viram null e são filtrados.
-  const settled = await Promise.all(ids.map((id) => materializeProduct(id)));
+  const settled = await Promise.all(ids.map((id) => materializeProduct(id, provenLookIdSet)));
   const recommendedProducts = settled.filter(Boolean);
 
   const first = recommendedProducts[0] || null;

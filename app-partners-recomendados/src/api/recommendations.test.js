@@ -8,10 +8,13 @@
 // Task 1: parseRecommendedIds retrocompatível (array puro, id único legado,
 // objeto novo {ids, provenLookIds}) + parseProvenLookIds nova (só resolve o
 // formato objeto, nunca lança).
+// Task 2: isProvenLook em cada item de recommendedProducts[], correto para o
+// formato novo e sempre false para os 2 formatos legados; teste de allowlist
+// exato de chaves prova zero vazamento de campo interno.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { getMetafields, getProduct } from '../nuvemshop-client/client.js';
-import { parseRecommendedIds, parseProvenLookIds } from './recommendations.js';
+import { parseRecommendedIds, parseProvenLookIds, getRecommendations } from './recommendations.js';
 
 vi.mock('../nuvemshop-client/client.js', () => ({
   getMetafields: vi.fn(),
@@ -64,5 +67,84 @@ describe('parseProvenLookIds', () => {
     expect(parseProvenLookIds(null)).toEqual([]);
     expect(() => parseProvenLookIds('not-json')).not.toThrow();
     expect(parseProvenLookIds('not-json')).toEqual([]);
+  });
+});
+
+function makeProduct(id) {
+  return {
+    id,
+    canonical_url: `https://example.test/produto-${id}`,
+    name: { pt: `Produto ${id}` },
+    images: [{ src: `https://example.test/img-${id}.jpg` }],
+    attributes: [{ pt: 'Cor' }, { pt: 'Tamanho' }],
+    variants: [
+      {
+        price: '100.00',
+        promotional_price: null,
+        values: [{ pt: 'Preto' }, { pt: 'M' }],
+        inventory_levels: [{ stock: 5 }],
+      },
+    ],
+  };
+}
+
+describe('getRecommendations - isProvenLook', () => {
+  it('Test 10: formato novo marca isProvenLook true só para ids em provenLookIds', async () => {
+    getMetafields.mockResolvedValue([
+      {
+        namespace: 'recomendados',
+        key: 'produto_sugerido',
+        value: '{"ids":["1","2"],"provenLookIds":["1"]}',
+      },
+    ]);
+    getProduct.mockImplementation((id) => Promise.resolve(makeProduct(id)));
+
+    const result = await getRecommendations('999');
+
+    expect(result.recommendedProducts).toHaveLength(2);
+    const byId = Object.fromEntries(result.recommendedProducts.map((p) => [p.id, p]));
+    expect(byId['1'].isProvenLook).toBe(true);
+    expect(byId['2'].isProvenLook).toBe(false);
+  });
+
+  it('Test 11: formato antigo (array puro) nunca marca isProvenLook true', async () => {
+    getMetafields.mockResolvedValue([
+      { namespace: 'recomendados', key: 'produto_sugerido', value: '["1","2"]' },
+    ]);
+    getProduct.mockImplementation((id) => Promise.resolve(makeProduct(id)));
+
+    const result = await getRecommendations('999');
+
+    expect(result.recommendedProducts).toHaveLength(2);
+    expect(result.recommendedProducts.every((p) => p.isProvenLook === false)).toBe(true);
+  });
+
+  it('Test 12: allowlist exato de chaves - nenhum campo interno vaza na resposta pública', async () => {
+    getMetafields.mockResolvedValue([
+      {
+        namespace: 'recomendados',
+        key: 'produto_sugerido',
+        value: '{"ids":["1"],"provenLookIds":["1"]}',
+      },
+    ]);
+    getProduct.mockImplementation((id) => Promise.resolve(makeProduct(id)));
+
+    const result = await getRecommendations('999');
+    const product = result.recommendedProducts[0];
+
+    expect(Object.keys(product).sort()).toEqual(
+      [
+        'discountPercent',
+        'id',
+        'image',
+        'isProvenLook',
+        'name',
+        'onSale',
+        'price',
+        'regularPrice',
+        'sizes',
+        'url',
+      ].sort()
+    );
   });
 });
