@@ -131,7 +131,7 @@ const selectSuccessfulRunForTodayStmt = db.prepare(
 const selectSnapshotsForRun = db.prepare(
   `SELECT s.product_id AS product_id, s.fabric_tag_canonical AS fabric_tag_canonical,
      s.has_available_grade AS has_available_grade, s.product_group_canonical AS product_group_canonical,
-     s.published AS published, p.name AS name
+     s.published AS published, p.name AS name, s.category_raw AS category_raw, p.canonical_url AS canonical_url
    FROM catalog_snapshots s
    JOIN products p ON p.id = s.product_id
    WHERE s.run_id = @runId
@@ -400,6 +400,8 @@ export function getLatestSnapshotProducts() {
     return {
       productId,
       name: row.name,
+      canonicalUrl: row.canonical_url || null,
+      categoryRaw: row.category_raw || null,
       colorValue: firstColorByProduct.has(productId) ? firstColorByProduct.get(productId) : null,
       fabricTagCanonical: row.fabric_tag_canonical,
       productGroupCanonical: row.product_group_canonical,
@@ -413,6 +415,14 @@ export function getLatestSnapshotProducts() {
       variants: variantsByProduct.get(productId) || [],
     };
   });
+}
+
+/**
+ * Retorna todos os pares de co-compra reais derivados da ingestão de pedidos históricos.
+ * @returns {Array<{ product_id_a: string, product_id_b: string, count: number }>}
+ */
+export function getAllCoPurchasePairs() {
+  return selectAllCoPurchasePairsStmt.all();
 }
 
 /**
