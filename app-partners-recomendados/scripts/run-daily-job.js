@@ -241,12 +241,15 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
     const hadBaseline = (writeBaseline.get(productId) || []).length > 0;
 
     if (eligible) {
-      const recommendedIds = recommendForProduct(productId, catalogProducts).map((r) =>
-        String(r.productId)
-      );
-      computed.push({ productId, recommendedIds, sourceEntry: source });
+      const recs = recommendForProduct(productId, catalogProducts);
+      const recommendedIds = recs.map((r) => String(r.productId));
+      const provenLookIds = recs
+        .filter((r) => r.matchReason === 'proven_look')
+        .map((r) => String(r.productId));
+      computed.push({ productId, recommendedIds, provenLookIds, sourceEntry: source });
     } else if (hadBaseline) {
-      computed.push({ productId, recommendedIds: [], sourceEntry: source });
+      // Fonte inelegível nunca tem candidato de Look computado pelo motor.
+      computed.push({ productId, recommendedIds: [], provenLookIds: [], sourceEntry: source });
     }
   }
 
@@ -304,6 +307,7 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
     await executeScheduledWrite({
       productId: item.productId,
       recommendedIds: item.recommendedIds,
+      provenLookIds: item.provenLookIds,
       dryRun,
       runId,
       sourceEntry: item.sourceEntry,

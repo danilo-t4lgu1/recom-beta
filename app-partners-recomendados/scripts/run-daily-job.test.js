@@ -89,7 +89,7 @@ const STORE_CATEGORIES = [{ id: 100, name: { pt: 'Vestidos' } }];
  * de estoque disponível (>=3 tamanhos com estoque > 0, D-04) por padrão e SEM
  * nenhuma tag de tecido mapeável (D-16) — mesmo fixture de `ingest-catalog.test.js`.
  */
-function makeProduct({ id, colorValue = 'Preto', published = true, inStock = true }) {
+function makeProduct({ id, colorValue = 'Preto', published = true, inStock = true, category = 'Vestidos' }) {
   const stock = inStock ? 5 : 0; // grade disponível exige >=3 tamanhos com estoque>0 (D-04)
   return {
     id,
@@ -104,8 +104,34 @@ function makeProduct({ id, colorValue = 'Preto', published = true, inStock = tru
       { id: `${id}-v2`, values: [{ pt: colorValue }, { pt: 'M' }], inventory_levels: [{ location_id: 'loc-1', stock }] },
       { id: `${id}-v3`, values: [{ pt: colorValue }, { pt: 'G' }], inventory_levels: [{ location_id: 'loc-1', stock }] },
     ],
-    categories: [{ id: 999, name: { pt: 'Vestidos' } }],
+    categories: [{ id: 999, name: { pt: category } }],
   };
+}
+
+/**
+ * Semeia um par de co-compra real diretamente em `co_purchase_pairs` (sinal de
+ * "Sugestão de Look Automática", matchReason:'proven_look') via conexão raw
+ * `better-sqlite3` — mesmo estilo/motivo de `seedBackdatedSuccessfulRun` (a
+ * conexão do catalog-store é singleton e não é mockada aqui; a conexão raw é
+ * fechada no `finally` para liberar o lock de arquivo no Windows). Respeita a
+ * convenção de chave canônica do schema (`product_id_a < product_id_b`,
+ * comparação de string) documentada em schema.sql.
+ */
+async function seedCoPurchasePair(dir, { productIdA, productIdB, count }) {
+  await import('../src/db/catalog-store.js');
+  const { default: Database } = await import('better-sqlite3');
+  const raw = new Database(join(dir, 'catalog.db'));
+  try {
+    const [a, b] = [String(productIdA), String(productIdB)].sort();
+    raw
+      .prepare(
+        `INSERT INTO co_purchase_pairs (product_id_a, product_id_b, count, computed_at)
+         VALUES (@a, @b, @count, @computedAt)`
+      )
+      .run({ a, b, count, computedAt: new Date().toISOString() });
+  } finally {
+    raw.close();
+  }
 }
 
 let tempDir;
@@ -557,6 +583,24 @@ describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67
     expect(dailyLog[0].reason).toBeNull();
     expect(dailyLog[0].dryRun).toBe(true);
     expect(dailyLog[0].novos + dailyLog[0].alterados + dailyLog[0].zerados).toBe(2);
+  });
+
+  it('provenLookIds (matchReason=proven_look) chega em executeScheduledWrite mesmo com cores diferentes entre fonte e candidato (par cross-group real)', async () => {
+    process.env.FIRST_ROLLOUT = 'true'; // isenta o disjuntor (baseline vazio => churn 100%)
+    const top = makeProduct({ id: 'prod-top', category: 'Blusas', colorValue: 'Azul' });
+    const bottom = makeProduct({ id: 'prod-bottom', category: 'Calças', colorValue: 'Vermelho' });
+    listProducts.mockResolvedValue({ products: [top, bottom], hasNextPage: false });
+
+    await seedCoPurchasePair(tempDir, { productIdA: 'prod-top', productIdB: 'prod-bottom', count: 5 });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    const call = executeScheduledWrite.mock.calls.find((c) => c[0].productId === 'prod-top');
+    expect(call).toBeDefined();
+    expect(call[0].provenLookIds).toContain('prod-bottom');
   });
 
   it('kill switch on: executeScheduledWrite com dryRun:false só para elegíveis+diff; fonte oculta (sem baseline) não recebe escrita', async () => {
