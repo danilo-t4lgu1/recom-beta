@@ -12,8 +12,11 @@ const MAX_RECOMMENDATIONS = 8; // espelha MAX_RECOMMENDATIONS do motor (RULE-01/
 
 /**
  * Normaliza o valor bruto do Metafield para uma lista de productIds (strings).
- * Trata os dois formatos que já existiram na loja, sem quebrar nenhum:
- *  - Formato atual (write-executor.js, Fase 5): array JSON de até 8 ids
+ * Trata os três formatos que já existiram (ou passam a existir) na loja, sem
+ * quebrar nenhum:
+ *  - Formato novo (write-executor.js, Fase 8/Plano 08-01): objeto JSON
+ *    `{ ids, provenLookIds }`, do qual só `ids` é extraído aqui.
+ *  - Formato anterior (write-executor.js, Fase 5): array JSON de até 8 ids
  *    (`'["321418552","349886153"]'`).
  *  - Formato legado (spike Fase 1): um único id "cru" (`'321418552'`), que é
  *    JSON válido (número) e resolve para `[id]`.
@@ -30,7 +33,35 @@ export function parseRecommendedIds(rawValue) {
     return [String(rawValue)];
   }
   if (Array.isArray(parsed)) return parsed.map((id) => String(id)).filter(Boolean);
+  if (parsed != null && typeof parsed === 'object' && Array.isArray(parsed.ids)) {
+    return parsed.ids.map((id) => String(id)).filter(Boolean);
+  }
   return [String(parsed)];
+}
+
+/**
+ * Normaliza o valor bruto do Metafield para a lista de productIds que são
+ * "Sugestão de Look Automática" (co-compra real, Plano 08-01), sempre
+ * defensivo — nunca lança, mesmo com formato legado ou JSON malformado.
+ *  - Formato novo `{ ids, provenLookIds }`: retorna `provenLookIds`.
+ *  - Qualquer outro formato (array puro antigo, id único legado, objeto sem
+ *    essa chave, JSON inválido, null/vazio): retorna `[]` — não existe
+ *    conceito de "Look comprovado" fora do formato novo.
+ * @param {string|null|undefined} rawValue
+ * @returns {string[]}
+ */
+export function parseProvenLookIds(rawValue) {
+  if (rawValue == null || rawValue === '') return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch {
+    return [];
+  }
+  if (parsed != null && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.provenLookIds)) {
+    return parsed.provenLookIds.map((id) => String(id)).filter(Boolean);
+  }
+  return [];
 }
 
 // Localiza a posição do atributo "Tamanho" em product.attributes (mesma
