@@ -5,6 +5,9 @@ import { TabsNav } from './components/TabsNav.jsx';
 import { OverviewTab } from './components/OverviewTab.jsx';
 import { InspectorTab } from './components/InspectorTab.jsx';
 import { ManualCurationTab } from './components/ManualCurationTab.jsx';
+import { LooksHubTab } from './components/LooksHubTab.jsx';
+import { CatalogHealthTab } from './components/CatalogHealthTab.jsx';
+import { AuditTab } from './components/AuditTab.jsx';
 import { fetchDashboard } from './api/client.js';
 
 export default function App() {
@@ -75,15 +78,13 @@ export default function App() {
         )}
 
         {activeTab === 'looks' && (
-          <div className="recom-card p-4 text-center text-muted">
-            Aba Looks Comprovados em montagem no Plan 11.5
-          </div>
+          <LooksHubTab
+            onInspectProduct={(id) => handleGoToTab('inspector', id)}
+          />
         )}
 
         {activeTab === 'health' && (
-          <div className="recom-card p-4 text-center text-muted">
-            Aba Saúde do Catálogo & Disjuntor em montagem no Plan 11.5
-          </div>
+          <CatalogHealthTab />
         )}
 
         {activeTab === 'curation' && (
@@ -91,9 +92,7 @@ export default function App() {
         )}
 
         {activeTab === 'audit' && (
-          <div className="recom-card p-4 text-center text-muted">
-            Aba Auditoria de Tecidos & Export em montagem no Plan 11.5
-          </div>
+          <AuditTab />
         )}
       </main>
     </div>
