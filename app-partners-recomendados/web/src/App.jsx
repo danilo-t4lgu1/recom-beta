@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header.jsx';
 import { TabsNav } from './components/TabsNav.jsx';
 import { OverviewTab } from './components/OverviewTab.jsx';
+import { InspectorTab } from './components/InspectorTab.jsx';
+import { ManualCurationTab } from './components/ManualCurationTab.jsx';
 import { fetchDashboard } from './api/client.js';
 
 export default function App() {
@@ -11,7 +13,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  const [inspectorProductId, setInspectorProductId] = useState(null);
+  const [targetProductId, setTargetProductId] = useState(null);
 
   const loadData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -34,7 +36,7 @@ export default function App() {
   }, [loadData]);
 
   const handleGoToTab = (tabId, productId = null) => {
-    if (productId) setInspectorProductId(productId);
+    if (productId) setTargetProductId(productId);
     setActiveTab(tabId);
   };
 
@@ -66,9 +68,10 @@ export default function App() {
         )}
 
         {activeTab === 'inspector' && (
-          <div className="recom-card p-4 text-center text-muted">
-            Aba Inspetor de Vitrines em montagem no Plan 11.4 {inspectorProductId ? `(Produto selecionado: ${inspectorProductId})` : ''}
-          </div>
+          <InspectorTab
+            initialProductId={targetProductId}
+            onSelectForCuration={(id) => handleGoToTab('curation', id)}
+          />
         )}
 
         {activeTab === 'looks' && (
@@ -84,9 +87,7 @@ export default function App() {
         )}
 
         {activeTab === 'curation' && (
-          <div className="recom-card p-4 text-center text-muted">
-            Aba Curadoria Manual em montagem no Plan 11.4
-          </div>
+          <ManualCurationTab initialProductId={targetProductId} />
         )}
 
         {activeTab === 'audit' && (
