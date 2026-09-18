@@ -47,7 +47,7 @@ describe('admin-intelligence domain module', () => {
       productId: '103',
       name: 'Blusa Eloá Branca',
       canonicalUrl: 'https://talgui.com.br/produtos/blusa-eloa/',
-      colorValue: 'Branco',
+      colorValue: 'Preto',
       categoryRaw: 'Blusas',
       productGroupCanonical: 'Partes de Cima',
       fabricTagCanonical: 'malha',

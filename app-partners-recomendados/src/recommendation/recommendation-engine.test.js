@@ -714,8 +714,8 @@ describe('recommendForProduct - visibilidade published (D-58)', () => {
   });
 });
 
-describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (provenLookPartnerIds)', () => {
-  it('par comprovado (mesmo sem cor batendo) aparece antes de qualquer peso 1/2', () => {
+describe('recommendForProduct - "Sugestão de Look Automática" (provenLookPartnerIds, corrigido 2026-09-18)', () => {
+  it('par comprovado com cor batendo vence e ocupa a posição 0 ABSOLUTA, à frente até do bloco mesmo-grupo', () => {
     const source = makeProduct({
       productId: '1',
       colorValue: 'Preto',
@@ -723,30 +723,49 @@ describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (proven
       productGroupCanonical: GROUP_PARTES_DE_CIMA,
       provenLookPartnerIds: [{ productId: '21', count: 5 }],
     });
-    // Peso 0: cor DIFERENTE da fonte, ainda assim elegível — único caso sem
-    // exigência de cor.
     const provenLook = makeProduct({
       productId: '21',
-      colorValue: 'Vermelho',
+      colorValue: 'Preto',
       fabricTagCanonical: null,
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
     });
-    // Peso 2: cor bate, estoque MAIOR que o par comprovado — ainda assim deve
-    // ficar depois, pois peso 0 > qualquer estoque de peso 1/2.
-    const weight2 = makeProduct({
-      productId: '22',
+    // Mesmo-grupo (peso 1) normalmente viria ANTES do bloco cruzado na
+    // composição clássica — o vencedor comprovado deve furar essa fila.
+    const sameGroupWeight1 = makeProduct({
+      productId: '11',
       colorValue: 'Preto',
-      fabricTagCanonical: 'Algodao',
-      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      fabricTagCanonical: 'Viscose',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 100000 })],
     });
 
-    const result = recommendForProduct('1', [source, provenLook, weight2]);
+    const result = recommendForProduct('1', [source, provenLook, sameGroupWeight1]);
 
-    expect(result.map((r) => r.productId)).toEqual(['21', '22']);
+    expect(result.map((r) => r.productId)).toEqual(['21', '11']);
     expect(result[0].matchReason).toBe('proven_look');
-    expect(result[1].matchReason).toBe('color_stock');
+    expect(result[1].matchReason).toBe('same_fabric');
+  });
+
+  it('par comprovado com cor DIFERENTE da fonte nunca vence (corrige bug de produção: Camisa Verde Militar + Calça Bege)', () => {
+    const source = makeProduct({
+      productId: '1',
+      colorValue: 'Verde Militar',
+      productGroupCanonical: GROUP_PARTES_DE_CIMA,
+      provenLookPartnerIds: [{ productId: '21', count: 27 }],
+    });
+    const wrongColorPartner = makeProduct({
+      productId: '21',
+      colorValue: 'Bege',
+      productGroupCanonical: GROUP_PARTES_DE_BAIXO,
+      variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
+    });
+
+    const result = recommendForProduct('1', [source, wrongColorPartner]);
+
+    // Sem cor batendo, o parceiro também não é elegível pelo motor clássico
+    // (cor sempre obrigatória fora do sinal de co-compra) — resultado vazio.
+    expect(result).toEqual([]);
   });
 
   it('par comprovado mas candidato sem estoque (hasAvailableGrade: false) NUNCA aparece', () => {
@@ -758,7 +777,7 @@ describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (proven
     });
     const noStock = makeProduct({
       productId: '21',
-      colorValue: 'Vermelho',
+      colorValue: 'Preto',
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       hasAvailableGrade: false,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
@@ -777,7 +796,7 @@ describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (proven
     });
     const hidden = makeProduct({
       productId: '21',
-      colorValue: 'Vermelho',
+      colorValue: 'Preto',
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       published: false,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 999 })],
@@ -787,32 +806,41 @@ describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (proven
     expect(result).toEqual([]);
   });
 
-  it('dois pares comprovados pro mesmo produto-fonte são ordenados por count desc entre si', () => {
+  it('só UM vencedor por produto-fonte (o de maior count) — o segundo par comprovado nunca ganha a posição 0, mas pode aparecer depois via motor clássico', () => {
     const source = makeProduct({
       productId: '1',
       colorValue: 'Preto',
+      fabricTagCanonical: 'Viscose',
       productGroupCanonical: GROUP_PARTES_DE_CIMA,
       provenLookPartnerIds: [
         { productId: '21', count: 3 },
         { productId: '22', count: 10 },
       ],
     });
+    // Ambos batem cor com a fonte — sem o cap de 1 vencedor, os DOIS entrariam
+    // como 'proven_look' (comportamento antigo, incorreto).
     const lowerCount = makeProduct({
       productId: '21',
-      colorValue: 'Azul',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
     });
     const higherCount = makeProduct({
       productId: '22',
-      colorValue: 'Verde',
+      colorValue: 'Preto',
+      fabricTagCanonical: 'Algodao',
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],
     });
 
     const result = recommendForProduct('1', [source, lowerCount, higherCount]);
+
     expect(result.map((r) => r.productId)).toEqual(['22', '21']);
-    expect(result.every((r) => r.matchReason === 'proven_look')).toBe(true);
+    expect(result[0].matchReason).toBe('proven_look');
+    // O segundo par comprovado (perdedor) some do sinal, mas ainda é
+    // recomendado normalmente pelo motor clássico (cor+estoque batem).
+    expect(result[1].matchReason).toBe('color_stock');
   });
 
   it('sem nenhum par comprovado (ausente ou []), comportamento idêntico ao anterior', () => {
@@ -862,7 +890,7 @@ describe('recommendForProduct - "Sugestão de Look Automática" / peso 0 (proven
     });
     const provenLookCandidate = makeProduct({
       productId: '31',
-      colorValue: 'Amarelo',
+      colorValue: 'Preto',
       fabricTagCanonical: null,
       productGroupCanonical: GROUP_PARTES_DE_BAIXO,
       variants: [makeVariant({ sizeValue: 'P', stockTotal: 1 })],

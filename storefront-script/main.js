@@ -326,7 +326,25 @@
       if (!track) return;
       var prevBtn = blockEl.querySelector('.rec-nav-prev');
       var nextBtn = blockEl.querySelector('.rec-nav-next');
-      var GAP_PX = 14;
+
+      // Sem overflow real (poucos produtos recomendados o bastante pra caber
+      // inteiros no viewport — comum em pares "Sugestão de Look" de cor rara,
+      // com poucos candidatos elegíveis do motor clássico pra completar a
+      // vitrine) os botões não têm nada pra rolar: ficam visíveis mas sem
+      // nenhum efeito ao clicar, parecendo quebrados (bug reportado em
+      // produção, 2026-09-18). Oculta os dois nesse caso — nunca só um, pra
+      // não sobrar uma seta sozinha sem funcionalidade.
+      if (track.scrollWidth <= track.clientWidth + 1) {
+        if (prevBtn) prevBtn.style.display = 'none';
+        if (nextBtn) nextBtn.style.display = 'none';
+        return;
+      }
+
+      // Gap real lido do CSS computado (não hardcoded) — o valor difere entre
+      // mobile (14px) e desktop (16px, media query >=768px), então um valor
+      // fixo desalinhava a distância de rolagem com o tamanho real do card.
+      var computedGap = parseFloat(window.getComputedStyle(track).columnGap);
+      var GAP_PX = isNaN(computedGap) ? 14 : computedGap;
       var firstCard = track.querySelector('.rec-card');
       var distance = firstCard
         ? firstCard.getBoundingClientRect().width + GAP_PX

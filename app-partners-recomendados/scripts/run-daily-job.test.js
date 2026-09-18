@@ -585,10 +585,10 @@ describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67
     expect(dailyLog[0].novos + dailyLog[0].alterados + dailyLog[0].zerados).toBe(2);
   });
 
-  it('provenLookIds (matchReason=proven_look) chega em executeScheduledWrite mesmo com cores diferentes entre fonte e candidato (par cross-group real)', async () => {
+  it('provenLookIds (matchReason=proven_look) chega em executeScheduledWrite quando cor bate entre fonte e candidato (par cross-group real)', async () => {
     process.env.FIRST_ROLLOUT = 'true'; // isenta o disjuntor (baseline vazio => churn 100%)
     const top = makeProduct({ id: 'prod-top', category: 'Blusas', colorValue: 'Azul' });
-    const bottom = makeProduct({ id: 'prod-bottom', category: 'Calças', colorValue: 'Vermelho' });
+    const bottom = makeProduct({ id: 'prod-bottom', category: 'Calças', colorValue: 'Azul' });
     listProducts.mockResolvedValue({ products: [top, bottom], hasNextPage: false });
 
     await seedCoPurchasePair(tempDir, { productIdA: 'prod-top', productIdB: 'prod-bottom', count: 5 });
