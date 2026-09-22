@@ -720,6 +720,13 @@ export function listDailyRecomputeLog() {
  * mais recente por `product_id` conta; linhas `failed` posteriores nunca a substituem
  * (T-07-06). `written_value` nulo ou JSON inválido vira `[]` sem lançar (defensivo —
  * o disjuntor nunca deve quebrar por um dado malformado no histórico).
+ *
+ * Trata os DOIS formatos que `written_value` já teve (bug corrigido 2026-09-18):
+ * o array puro legado (`'["id1","id2"]'`, escritas anteriores ao Plano 08-01) e o
+ * objeto `{ids, provenLookIds}` (toda escrita desde 08-01, `write-executor.js`).
+ * Antes desta correção, QUALQUER escrita no formato novo virava baseline `[]`
+ * (churn falso de ~100% no disjuntor para todo produto reescrito desde a Fase 8 —
+ * confirmado ao vivo: os 790 ids do run_id 67 apareciam como "sem baseline").
  * @returns {Map<string, string[]>} productId → array de ids realmente gravados.
  */
 export function getLastWrittenValuesForAllProducts() {
@@ -730,7 +737,11 @@ export function getLastWrittenValuesForAllProducts() {
     if (row.written_value != null) {
       try {
         const parsed = JSON.parse(row.written_value);
-        values = Array.isArray(parsed) ? parsed : [];
+        if (Array.isArray(parsed)) {
+          values = parsed;
+        } else if (parsed != null && typeof parsed === 'object' && Array.isArray(parsed.ids)) {
+          values = parsed.ids;
+        }
       } catch {
         values = [];
       }
