@@ -354,6 +354,34 @@ describe('executeScheduledWrite (caminho scheduled, D-61/D-67)', () => {
     expect(insertWriteLog).not.toHaveBeenCalled();
   });
 
+  it('SC3.1: recommendedIds JÁ vazio (fonte sem estoque/zero candidatos) GRAVA de verdade, limpando metafield antigo — NÃO é coverage-gap (bug corrigido 2026-09-22)', async () => {
+    vi.mocked(findMetafield).mockResolvedValue({ id: 'mf-old', value: JSON.stringify({ ids: ['9'], provenLookIds: [] }) });
+    vi.mocked(updateMetafield).mockResolvedValue({ id: 'mf-old' });
+
+    const result = await executeScheduledWrite({
+      productId: '1',
+      recommendedIds: [], // motor já calculou vazio — resposta final, não lacuna
+      dryRun: false,
+      runId: 42,
+      sourceEntry: source(),
+      snapshotById: snapshotWith([]),
+    });
+
+    expect(updateMetafield).toHaveBeenCalledWith({
+      id: 'mf-old',
+      value: JSON.stringify({ ids: [], provenLookIds: [] }),
+    });
+    expect(insertWriteLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: '1',
+        writtenValue: JSON.stringify({ ids: [], provenLookIds: [] }),
+        triggeredBy: 'scheduled',
+        status: 'success',
+      })
+    );
+    expect(result).toEqual({ productId: '1', approvedIds: [], dryRun: false, written: true });
+  });
+
   it('SC4: dryRun:true não faz nenhuma chamada de rede/DB (zero I/O)', async () => {
     const result = await executeScheduledWrite({
       productId: '1',

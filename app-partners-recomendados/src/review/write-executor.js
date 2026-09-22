@@ -122,10 +122,19 @@ export function filterReferentiallyValid(sourceEntry, recommendedIds, snapshotBy
  * `write_log`.
  *
  * Antes de qualquer escrita aplica a Defesa 2 (`filterReferentiallyValid`,
- * D-67) contra o snapshot atual; se o conjunto ficar vazio, retorna uma lacuna
- * de cobertura (`written: false`, `reason: 'coverage-gap'`) sem gravar lixo.
- * `dryRun:true` retorna cedo com ZERO I/O (base do kill switch D-62, mesmo
- * padrão de `executeApprovedWrite`).
+ * D-67) contra o snapshot atual; se HAVIA candidatos e TODOS foram
+ * descartados, retorna uma lacuna de cobertura (`written: false`,
+ * `reason: 'coverage-gap'`) sem gravar lixo. Diferente de `recommendedIds`
+ * JÁ vir vazio do motor (fonte sem estoque/despublicada, ou zero candidatos
+ * elegíveis) — esse é o resultado FINAL, não uma lacuna, e precisa ser
+ * gravado pra limpar um metafield antigo (bug corrigido 2026-09-22: antes,
+ * `approvedIds.length === 0` virava coverage-gap nos dois casos, então um
+ * produto que devesse ficar sem vitrine NUNCA tinha seu metafield antigo
+ * sobrescrito — a vitrine obsoleta ficava visível indefinidamente; achado ao
+ * vivo quando Camisa Dália/Blusa Nathaly continuaram mostrando dado de antes
+ * da correção do motor mesmo depois de duas execuções reais). `dryRun:true`
+ * retorna cedo com ZERO I/O (base do kill switch D-62, mesmo padrão de
+ * `executeApprovedWrite`).
  *
  * `provenLookIds` é a lista CANDIDATA de "Sugestão de Look Automática"
  * (`matchReason: 'proven_look'`) calculada pelo chamador (`run-daily-job.js`),
@@ -146,11 +155,15 @@ export async function executeScheduledWrite({
   snapshotById,
 }) {
   // Defesa 2 (D-67): descarta ids inválidos ANTES de qualquer escrita.
+  const hadCandidates = Array.isArray(recommendedIds) && recommendedIds.length > 0;
   const approvedIds = filterReferentiallyValid(sourceEntry, recommendedIds, snapshotById);
 
-  // Conjunto vazio após a Defesa 2 => lacuna de cobertura registrada, nunca lixo
-  // gravado (D-67). Nenhuma escrita, nenhuma linha de sucesso em write_log.
-  if (approvedIds.length === 0) {
+  // Lacuna de cobertura de verdade: HAVIA candidatos e a Defesa 2 descartou
+  // todos (referência inválida/oculta/sem estoque/cor diferente) — dado
+  // suspeito, nunca grava. Um conjunto JÁ vazio na entrada não passa por
+  // aqui (bug corrigido 2026-09-22, ver docstring acima) — segue para
+  // gravar de verdade, inclusive limpando um metafield antigo.
+  if (hadCandidates && approvedIds.length === 0) {
     return { productId, approvedIds: [], written: false, reason: 'coverage-gap' };
   }
 
