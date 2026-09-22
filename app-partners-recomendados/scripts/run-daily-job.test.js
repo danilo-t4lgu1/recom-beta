@@ -603,6 +603,51 @@ describe('runDailyJob — escrita automática (D-61/D-68), Defesa 2 wiring (D-67
     expect(call[0].provenLookIds).toContain('prod-bottom');
   });
 
+  it('regrava quando o CONJUNTO de ids não muda mas provenLookIds muda — antes o disjuntor via "sem diff" e nunca regravava (bug corrigido 2026-09-21, D-68)', async () => {
+    process.env.FIRST_ROLLOUT = 'true';
+    const top = makeProduct({ id: 'prod-top', category: 'Blusas', colorValue: 'Azul' });
+    const bottom = makeProduct({ id: 'prod-bottom', category: 'Calças', colorValue: 'Azul' });
+    listProducts.mockResolvedValue({ products: [top, bottom], hasNextPage: false });
+
+    await seedCoPurchasePair(tempDir, { productIdA: 'prod-top', productIdB: 'prod-bottom', count: 5 });
+
+    // Baseline PRÉ-EXISTENTE: mesmo conjunto de ids (['prod-bottom']) que será
+    // computado agora, mas SEM provenLookIds — simula uma escrita antiga feita
+    // antes do sinal de Look comprovado existir/valer para este par. `setsEqual`
+    // (só ids) veria "sem diff" e puraria a escrita, deixando a flag errada.
+    // `insertWriteLog` exige que o produto já exista (FK) — seed mínimo via
+    // `persistIngestionBatch`, mesmo padrão de `seedProduct` em catalog-store.test.js.
+    const store = await import('../src/db/catalog-store.js');
+    const seedRunId = store.startIngestionRun({ categoryId: '999', categoryName: 'Blusas' });
+    store.persistIngestionBatch({
+      runId: seedRunId,
+      records: {
+        products: [{ id: 'prod-top', name: 'Produto Teste', handle: 'prod-top', canonicalUrl: 'https://x/prod-top' }],
+      },
+    });
+    store.insertWriteLog({
+      productId: 'prod-top',
+      runId: null,
+      metafieldId: 'mf-existing',
+      previousValue: null,
+      writtenValue: JSON.stringify({ ids: ['prod-bottom'], provenLookIds: [] }),
+      triggeredBy: 'scheduled',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-09-01T10:00:00Z',
+    });
+
+    const { runDailyJob } = await import('./run-daily-job.js');
+    const { executeScheduledWrite } = await import('../src/review/write-executor.js');
+
+    await runDailyJob({ categoryNames: ['Vestidos'] });
+
+    const call = executeScheduledWrite.mock.calls.find((c) => c[0].productId === 'prod-top');
+    expect(call).toBeDefined();
+    expect(call[0].recommendedIds).toEqual(['prod-bottom']);
+    expect(call[0].provenLookIds).toEqual(['prod-bottom']);
+  });
+
   it('kill switch on: executeScheduledWrite com dryRun:false só para elegíveis+diff; fonte oculta (sem baseline) não recebe escrita', async () => {
     process.env.WRITE_OVERRIDE = 'true';
     process.env.FIRST_ROLLOUT = 'true';

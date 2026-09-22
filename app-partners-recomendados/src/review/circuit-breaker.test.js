@@ -8,7 +8,7 @@
 // recomendação e ficariam vazios).
 
 import { describe, it, expect } from 'vitest';
-import { setsEqual, tripBreaker } from './circuit-breaker.js';
+import { setsEqual, tripBreaker, arraysEqualOrdered } from './circuit-breaker.js';
 
 /** Constrói um baseline `Map<string, string[]>` a partir de um objeto simples. */
 function baselineOf(obj) {
@@ -36,6 +36,26 @@ describe('setsEqual', () => {
     expect(setsEqual([], [])).toBe(true);
     expect(setsEqual(null, undefined)).toBe(true);
     expect(setsEqual([], null)).toBe(true);
+  });
+});
+
+describe('arraysEqualOrdered (bug corrigido 2026-09-21, D-68)', () => {
+  it('false para os mesmos ids em ordem diferente — ao contrário de setsEqual', () => {
+    expect(arraysEqualOrdered(['1', '2', '3'], ['3', '1', '2'])).toBe(false);
+    expect(setsEqual(['1', '2', '3'], ['3', '1', '2'])).toBe(true); // contraste deliberado
+  });
+
+  it('true para os mesmos ids na mesma ordem (coerção por String)', () => {
+    expect(arraysEqualOrdered([1, 2], ['1', '2'])).toBe(true);
+  });
+
+  it('false para tamanhos diferentes', () => {
+    expect(arraysEqualOrdered(['1'], ['1', '2'])).toBe(false);
+  });
+
+  it('true para dois vazios; trata null/undefined como vazio', () => {
+    expect(arraysEqualOrdered([], [])).toBe(true);
+    expect(arraysEqualOrdered(null, undefined)).toBe(true);
   });
 });
 

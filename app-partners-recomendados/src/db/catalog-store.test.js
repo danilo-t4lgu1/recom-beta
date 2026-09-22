@@ -864,6 +864,39 @@ describe('baseline de conjunto (disjuntor) + resumo do último run (Fase 07, D-6
     expect(map.get('disj-look')).toEqual(['21', '22', '23']);
   });
 
+  it('getLastWrittenProvenLookIdsForAllProducts() devolve provenLookIds do formato novo; [] no formato legado (bug corrigido 2026-09-21)', async () => {
+    const store = await import('./catalog-store.js');
+    const runId1 = seedProduct(store, 'disj-proven');
+    const runId2 = seedProduct(store, 'disj-legacy');
+
+    store.insertWriteLog({
+      productId: 'disj-proven',
+      runId: runId1,
+      metafieldId: 'mf-1',
+      previousValue: null,
+      writtenValue: JSON.stringify({ ids: ['21', '22'], provenLookIds: ['21'] }),
+      triggeredBy: 'scheduled',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-09-21T10:00:00Z',
+    });
+    store.insertWriteLog({
+      productId: 'disj-legacy',
+      runId: runId2,
+      metafieldId: 'mf-2',
+      previousValue: null,
+      writtenValue: JSON.stringify(['31', '32']),
+      triggeredBy: 'manual',
+      status: 'success',
+      errorMessage: null,
+      writtenAt: '2026-09-21T10:00:00Z',
+    });
+
+    const map = store.getLastWrittenProvenLookIdsForAllProducts();
+    expect(map.get('disj-proven')).toEqual(['21']);
+    expect(map.get('disj-legacy')).toEqual([]);
+  });
+
   it('uma linha failed mais recente NÃO substitui o valor success no Map (Test 27, D-63)', async () => {
     const store = await import('./catalog-store.js');
     const runId = seedProduct(store, 'disj-b');

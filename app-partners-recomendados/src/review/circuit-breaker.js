@@ -34,6 +34,26 @@ export function setsEqual(a, b) {
 }
 
 /**
+ * Compara dois arrays de ids por POSIÇÃO (ordem importa), por String — ao
+ * contrário de `setsEqual`. Necessária para decidir se uma escrita real é
+ * necessária (D-68 em `run-daily-job.js`): a flag "Sugestão de Look" depende
+ * do ÍNDICE 0 do array gravado, não só de quais ids estão no conjunto — dois
+ * conjuntos idênticos em ordens diferentes produzem vitrines visualmente
+ * diferentes (bug corrigido 2026-09-21, achado ao vivo: Blusa Nathaly mantinha
+ * o mesmo conjunto de recomendados mas com a Saia Adélia na 2ª posição em vez
+ * da 1ª, e a escrita real nunca disparava porque `setsEqual` via "sem diff").
+ * @param {(string|number)[]|null|undefined} a
+ * @param {(string|number)[]|null|undefined} b
+ * @returns {boolean}
+ */
+export function arraysEqualOrdered(a, b) {
+  const arrA = (a || []).map(String);
+  const arrB = (b || []).map(String);
+  if (arrA.length !== arrB.length) return false;
+  return arrA.every((id, i) => id === arrB[i]);
+}
+
+/**
  * Escala um limiar-base pelos dias decorridos desde o último sucesso, até um
  * teto absoluto — achado 2026-08-25 (D-63 revisão): sem isso, um abort congela
  * o baseline (`getLastWrittenValuesForAllProducts` só avança em sucesso), o que

@@ -34,13 +34,14 @@ import {
   getLastSuccessfulIngestionRunSummary,
   insertDailyRecomputeLog,
   getLastWrittenValuesForAllProducts,
+  getLastWrittenProvenLookIdsForAllProducts,
   getLastSuccessfulWriteTimestamp,
 } from '../src/db/catalog-store.js';
 import { buildReviewQueue } from '../src/review/review-queue.js';
 import { notifyWriteFailure, notifyDailySummary } from '../src/review/notify-failure.js';
 import { executeScheduledWrite } from '../src/review/write-executor.js';
 import { recommendForProduct } from '../src/recommendation/recommendation-engine.js';
-import { tripBreaker, setsEqual } from '../src/review/circuit-breaker.js';
+import { tripBreaker, setsEqual, arraysEqualOrdered } from '../src/review/circuit-breaker.js';
 
 // Banda mínima da Defesa 1 (D-66, à discrição): o total lido hoje não pode cair
 // abaixo de 70% do último run bem-sucedido, senão trata-se de leitura truncada e
@@ -228,6 +229,7 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
   const dryRun = !resolveWriteEnabled();
   const isFirstRollout = process.env.FIRST_ROLLOUT === 'true';
   const writeBaseline = getLastWrittenValuesForAllProducts();
+  const provenLookBaseline = getLastWrittenProvenLookIdsForAllProducts();
   const snapshotById = new Map(catalogProducts.map((p) => [String(p.productId), p]));
 
   // Conjunto COMPLETO calculado (denominador do disjuntor): cada fonte elegível
@@ -302,7 +304,14 @@ export async function runDailyJob({ categoryNames, fullCatalog = false, allowSam
   let novos = 0;
   for (const item of computed) {
     const before = writeBaseline.get(item.productId) || [];
-    if (setsEqual(before, item.recommendedIds)) continue; // sem diff, não grava (D-68)
+    const beforeProvenLookIds = provenLookBaseline.get(item.productId) || [];
+    // D-68 revisado (bug corrigido 2026-09-21): conjunto igual (setsEqual) já
+    // não basta — a flag "Sugestão de Look" depende da ORDEM (índice 0) e de
+    // provenLookIds, então uma mudança só de ordem ou só de provenLookIds
+    // (conjunto de ids inalterado) também precisa regravar.
+    const sameIds = arraysEqualOrdered(before, item.recommendedIds);
+    const sameProvenLook = setsEqual(beforeProvenLookIds, item.provenLookIds);
+    if (sameIds && sameProvenLook) continue; // sem diff real, não grava (D-68)
 
     await executeScheduledWrite({
       productId: item.productId,
