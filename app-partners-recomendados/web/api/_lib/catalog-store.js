@@ -752,6 +752,40 @@ export function getLastWrittenValuesForAllProducts() {
 }
 
 /**
+ * Irmã de `getLastWrittenValuesForAllProducts()`: mesma fonte/linha (última
+ * `status='success'` por produto), mas devolve `provenLookIds` em vez de `ids`.
+ * Bug corrigido 2026-09-21: o job diário decidia se regravava um produto
+ * comparando só o CONJUNTO de `ids` (`setsEqual`, ordem ignorada) — mas a flag
+ * "Sugestão de Look" depende da ORDEM (índice 0) e de `provenLookIds`, nunca só
+ * do conjunto. Um produto cujo conjunto de recomendados não mudasse, mas cuja
+ * ordem ou `provenLookIds` mudasse (ex: Blusa Nathaly — Saia Adélia permanecia
+ * no conjunto mas caía para a 2ª posição sem a flag), era silenciosamente
+ * pulado pela escrita real, mesmo com o motor já corrigido. Formato legado
+ * (array puro, sem conceito de Look comprovado) sempre devolve `[]` — nunca
+ * lança em JSON inválido, mesma disciplina defensiva da função irmã.
+ * @returns {Map<string, string[]>} productId → array de provenLookIds gravados.
+ */
+export function getLastWrittenProvenLookIdsForAllProducts() {
+  const rows = selectLastWrittenValuesStmt.all();
+  const map = new Map();
+  for (const row of rows) {
+    let values = [];
+    if (row.written_value != null) {
+      try {
+        const parsed = JSON.parse(row.written_value);
+        if (parsed != null && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.provenLookIds)) {
+          values = parsed.provenLookIds;
+        }
+      } catch {
+        values = [];
+      }
+    }
+    map.set(String(row.product_id), values);
+  }
+  return map;
+}
+
+/**
  * Timestamp (ISO 8601, `written_at`) da última linha `status='success'` em
  * `write_log`, GLOBAL (qualquer produto) — não confundir com
  * `getLastWrittenValuesForAllProducts`, que é por produto. Alimenta o
